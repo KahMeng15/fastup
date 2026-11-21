@@ -90,7 +90,7 @@ class UploadManager(private val context: Context) {
         // Verify format eligibility
         val shouldUpload = when (uploadFormat) {
             UploadFormat.RAW_AND_JPEG -> true
-            UploadFormat.JPEG_ONLY -> photo.isJpeg
+            UploadFormat.JPEG_ONLY -> photo.isJpeg || photo.previewFile != null
             UploadFormat.RAW_ONLY -> photo.isRaw
         }
 
@@ -178,7 +178,7 @@ class UploadManager(private val context: Context) {
         // Determine which file to upload
         val fileToUpload: File = when (uploadFormat) {
             UploadFormat.RAW_ONLY -> photo.rawFile ?: photo.localFile
-            UploadFormat.JPEG_ONLY -> photo.jpegFile ?: photo.displayFile
+            UploadFormat.JPEG_ONLY -> photo.jpegFile ?: photo.previewFile ?: photo.displayFile
             UploadFormat.RAW_AND_JPEG -> photo.localFile
         }
 

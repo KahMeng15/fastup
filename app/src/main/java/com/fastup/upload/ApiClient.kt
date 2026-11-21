@@ -43,6 +43,7 @@ class ApiClient(
         onProgress: (bytesWritten: Long, totalBytes: Long) -> Unit
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
+            val validSessionId = sessionId.trim().ifEmpty { "weddings/staging" }
             val mediaType = if (file.name.endsWith(".arw", ignoreCase = true)) {
                 "application/octet-stream".toMediaTypeOrNull()
             } else {
@@ -54,8 +55,9 @@ class ApiClient(
 
             val multipartBody = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
-                .addFormDataPart("session_id", sessionId)
-                .addFormDataPart("folderPath", sessionId)
+                .addFormDataPart("sessionId", validSessionId)
+                .addFormDataPart("session_id", validSessionId)
+                .addFormDataPart("folderPath", validSessionId)
                 .addFormDataPart(
                     "file",
                     file.name,
@@ -63,9 +65,12 @@ class ApiClient(
                 )
                 .build()
 
+            val encodedSessionId = java.net.URLEncoder.encode(validSessionId, "UTF-8")
             val request = Request.Builder()
-                .url(cleanUrl("api/staging/upload"))
+                .url(cleanUrl("api/staging/upload?sessionId=$encodedSessionId"))
                 .addHeader("x-api-key", apiKey)
+                .addHeader("x-staging-key", apiKey)
+                .addHeader("x-session-id", validSessionId)
                 .post(multipartBody)
                 .build()
 
