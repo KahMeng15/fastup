@@ -13,25 +13,37 @@ object ArwParser {
     private const val TAG = "ArwParser"
 
     /**
-     * Extracts preview JPEG from Sony ARW (TIFF-based) file and saves to a thumbnail cache file.
-     * Sony ARW files have an embedded JPEG preview inside.
-     * We try:
-     * 1. ExifInterface.thumbnailBitmap or thumbnailBytes
-     * 2. Direct scan for embedded JPEG SOI (0xFFD8FFE0 or 0xFFD8FFE1) if ExifInterface fails
+     * Extracts high-resolution preview JPEG from Sony ARW (or TIFF-based RAW) file and saves to preview cache file.
+     * Sony ARW files have:
+     * 1. 160x120 EXIF thumbnail in IFD1 (too small, blurry)
+     * 2. 1616x1080 (or higher) full HD embedded preview JPEG in IFD0 / raw stream (~320KB)
+     *
+     * We scan the first 8MB for the largest embedded JPEG stream (>= 20KB) so that the preview is sharp and high-res.
      */
     fun extractPreview(arwFile: File, outputCacheDir: File): File? {
         val previewFile = File(outputCacheDir, "${arwFile.nameWithoutExtension}_thumb.jpg")
-        if (previewFile.exists() && previewFile.length() > 0) {
+        if (previewFile.exists() && previewFile.length() > 20 * 1024) {
             return previewFile
         }
 
+        // 1. Scan for the largest embedded JPEG in the ARW file (1616x1080 HD preview)
+        try {
+            val extracted = scanLargestEmbeddedJpeg(arwFile, previewFile)
+            if (extracted) {
+                return previewFile
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Direct largest embedded JPEG scan failed: ${e.message}")
+        }
+
+        // 2. Fallback: ExifInterface thumbnail if large preview extraction failed
         try {
             val exif = ExifInterface(arwFile.absolutePath)
             if (exif.hasThumbnail()) {
                 val thumbBytes = exif.thumbnailBytes
                 if (thumbBytes != null && thumbBytes.isNotEmpty()) {
                     previewFile.outputStream().use { it.write(thumbBytes) }
-                    Log.d(TAG, "Extracted preview via ExifInterface (${thumbBytes.size} bytes)")
+                    Log.d(TAG, "Fallback to ExifInterface thumbnail (${thumbBytes.size} bytes)")
                     return previewFile
                 }
             }
@@ -39,61 +51,59 @@ object ArwParser {
             Log.w(TAG, "ExifInterface thumbnail extraction failed: ${e.message}")
         }
 
-        // Fallback: Scan ARW header for embedded JPEG marker (SOI: FF D8 FF)
-        try {
-            val extracted = scanEmbeddedJpeg(arwFile, previewFile)
-            if (extracted) {
-                return previewFile
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Direct embedded JPEG scan failed: ${e.message}")
-        }
-
         return null
     }
 
-    private fun scanEmbeddedJpeg(arwFile: File, outputFile: File): Boolean {
-        // Read the first 2MB where Sony embeds the preview thumbnail
-        val maxScan = minOf(arwFile.length(), 4L * 1024 * 1024).toInt()
+    private fun scanLargestEmbeddedJpeg(arwFile: File, outputFile: File): Boolean {
+        // Sony ARW stores the 1616x1080 preview within the first 4-8MB
+        val maxScan = minOf(arwFile.length(), 8L * 1024 * 1024).toInt()
         val buffer = ByteArray(maxScan)
 
         RandomAccessFile(arwFile, "r").use { raf ->
             raf.readFully(buffer)
         }
 
-        var jpegStart = -1
-        for (i in 0 until maxScan - 4) {
-            // Check for JPEG SOI (FF D8) followed by marker FF
+        var bestStart = -1
+        var bestLength = 0
+        var i = 0
+
+        while (i < maxScan - 4) {
+            // Check for JPEG SOI (FF D8 FF)
             if ((buffer[i].toInt() and 0xFF) == 0xFF &&
                 (buffer[i + 1].toInt() and 0xFF) == 0xD8 &&
                 (buffer[i + 2].toInt() and 0xFF) == 0xFF
             ) {
-                // Potential JPEG start
-                jpegStart = i
-                break
-            }
-        }
+                // Find matching JPEG EOI (FF D9)
+                var eoi = -1
+                var j = i + 2
+                while (j < maxScan - 1) {
+                    if ((buffer[j].toInt() and 0xFF) == 0xFF &&
+                        (buffer[j + 1].toInt() and 0xFF) == 0xD9
+                    ) {
+                        eoi = j + 2
+                        break
+                    }
+                    j++
+                }
 
-        if (jpegStart == -1) return false
-
-        // Locate JPEG EOI (FF D9) after start
-        var jpegEnd = -1
-        for (i in (jpegStart + 2) until maxScan - 1) {
-            if ((buffer[i].toInt() and 0xFF) == 0xFF && (buffer[i + 1].toInt() and 0xFF) == 0xD9) {
-                // Must be reasonably sized (> 10KB)
-                if (i - jpegStart > 10 * 1024) {
-                    jpegEnd = i + 2
-                    break
+                if (eoi != -1) {
+                    val length = eoi - i
+                    if (length > bestLength) {
+                        bestLength = length
+                        bestStart = i
+                    }
+                    i = eoi
+                    continue
                 }
             }
+            i++
         }
 
-        if (jpegEnd > jpegStart) {
-            val length = jpegEnd - jpegStart
+        if (bestStart != -1 && bestLength > 20 * 1024) {
             FileOutputStream(outputFile).use { fos ->
-                fos.write(buffer, jpegStart, length)
+                fos.write(buffer, bestStart, bestLength)
             }
-            Log.d(TAG, "Extracted embedded JPEG directly: $length bytes")
+            Log.i(TAG, "Extracted high-res embedded JPEG directly: $bestLength bytes (at offset $bestStart)")
             return true
         }
 

@@ -132,18 +132,92 @@ class SonyPtpDriver(
     }
 
     /**
+     * Checks Sony property 0xD215 (ObjectInMemory).
+     * Returns true if an object is resident in camera RAM waiting for transfer (bit 15 set, value > 0x8000).
+     */
+    fun hasObjectInMemory(): Boolean {
+        return try {
+            val tid = nextTransactionId()
+            val cmd = PtpPacket.createCommand(
+                SonyPtpConstants.PTP_OP_GET_DEVICE_PROP_VALUE,
+                tid,
+                SonyPtpConstants.SONY_DPC_OBJECT_IN_MEMORY
+            )
+            if (!sendBulk(cmd)) return false
+
+            val maxPacket = bulkIn.maxPacketSize.coerceAtLeast(16384)
+            val buffer = ByteArray(maxPacket)
+            val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 1000)
+            if (read < PtpPacket.HEADER_SIZE) return false
+
+            val header = PtpPacket.parseHeader(buffer)
+            if (header.type != SonyPtpConstants.PTP_CONTAINER_DATA) {
+                Log.d(TAG, "hasObjectInMemory returned non-data container: type=${header.type}, code=0x${header.code.toString(16)}")
+                return false
+            }
+
+            val payloadLen = read - PtpPacket.HEADER_SIZE
+            val value = if (payloadLen >= 2) {
+                val bb = ByteBuffer.wrap(buffer, PtpPacket.HEADER_SIZE, 2).order(ByteOrder.LITTLE_ENDIAN)
+                bb.short.toInt() and 0xFFFF
+            } else 0
+
+            // Consume trailing response container
+            readTransactionResponse()
+
+            Log.d(TAG, "Sony ObjectInMemory (0xD215) value: 0x${value.toString(16)} ($value)")
+            (value > 0x8000) || (value and 0x8000 != 0)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error checking hasObjectInMemory: ${e.message}")
+            false
+        }
+    }
+
+    /**
      * Retrieves filename and approximate size from ObjectInfo dataset.
+     * Returns null if no object is ready or camera returned a response container directly (e.g. queue empty).
      */
     fun getObjectInfo(handle: Int): Pair<String, Long>? {
         val tid = nextTransactionId()
         val cmd = PtpPacket.createCommand(SonyPtpConstants.PTP_OP_GET_OBJECT_INFO, tid, handle)
         if (!sendBulk(cmd)) return null
 
-        val data = receiveData()
-        val resp = readTransactionResponse()
+        val maxPacket = bulkIn.maxPacketSize.coerceAtLeast(16384)
+        val buffer = ByteArray(maxPacket)
+        val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 1500)
+        if (read < PtpPacket.HEADER_SIZE) return null
 
-        if (data == null || data.size < 52) {
-            Log.w(TAG, "getObjectInfo returned insufficient data: size=${data?.size}")
+        val header = PtpPacket.parseHeader(buffer)
+        if (header.type == SonyPtpConstants.PTP_CONTAINER_RESPONSE) {
+            Log.d(TAG, "getObjectInfo(0x${handle.toString(16)}) returned response container directly: code=0x${header.code.toString(16)}")
+            return null
+        }
+
+        if (header.type != SonyPtpConstants.PTP_CONTAINER_DATA) {
+            Log.w(TAG, "getObjectInfo expected DATA container, got type ${header.type}")
+            return null
+        }
+
+        val totalDataLen = (header.length - PtpPacket.HEADER_SIZE).toInt()
+        val bos = ByteArrayOutputStream(if (totalDataLen > 0) totalDataLen else 1024)
+
+        val firstChunk = read - PtpPacket.HEADER_SIZE
+        if (firstChunk > 0) {
+            bos.write(buffer, PtpPacket.HEADER_SIZE, firstChunk)
+        }
+
+        while (bos.size() < totalDataLen) {
+            val chunk = connection.bulkTransfer(bulkIn, buffer, buffer.size, 2000)
+            if (chunk <= 0) break
+            bos.write(buffer, 0, chunk)
+        }
+
+        // Consume trailing response container
+        val resp = readTransactionResponse()
+        val data = bos.toByteArray()
+
+        if (data.size < 52) {
+            Log.w(TAG, "getObjectInfo returned insufficient data: size=${data.size}")
             return null
         }
 

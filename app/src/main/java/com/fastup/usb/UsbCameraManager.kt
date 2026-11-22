@@ -22,7 +22,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -98,6 +101,8 @@ class UsbCameraManager(
             }
         }
     }
+
+    private val transferMutex = Mutex()
 
     fun start() {
         val filter = IntentFilter().apply {
@@ -258,7 +263,7 @@ class UsbCameraManager(
         loopJob?.cancel()
         loopJob = scope.launch {
             Log.i(TAG, "Starting PTP event loop on Interrupt endpoint...")
-            while (_connectionState.value == CameraConnectionState.CONNECTED) {
+            while (isActive && _connectionState.value != CameraConnectionState.DISCONNECTED && _connectionState.value != CameraConnectionState.ERROR) {
                 val d = driver ?: break
 
                 // Read incoming PTP event from camera interrupt endpoint (blocking up to 500ms)
@@ -288,46 +293,101 @@ class UsbCameraManager(
         }
     }
 
-    private suspend fun handleNewObject(handle: Int) {
-        val d = driver ?: return
-        _connectionState.value = CameraConnectionState.CAPTURING
-        _deviceTransferStats.update {
-            it.copy(
-                totalCaptured = it.totalCaptured + 1,
-                pendingTransfer = it.pendingTransfer + 1
-            )
-        }
+    private suspend fun handleNewObject(initialHandle: Int) {
+        transferMutex.withLock {
+            val d = driver ?: return@withLock
+            _connectionState.value = CameraConnectionState.CAPTURING
 
-        try {
-            // Give camera buffer a brief moment (250ms) to finalize write to memory
-            delay(250)
+            var currentHandle = initialHandle
+            var downloadedInBatch = 0
+            var firstWasJpeg = false
+            var firstWasRaw = false
 
-            // Query ObjectInfo first to get exact filename and size
-            val info = d.getObjectInfo(handle)
-            val fileName = info?.first?.takeIf { it.isNotBlank() } ?: "DSC_${System.currentTimeMillis()}.ARW"
-            val expectedSize = info?.second ?: 0L
+            try {
+                while (downloadedInBatch < 2) {
+                    // Short stabilization delay before requesting next object from camera buffer
+                    delay(150)
 
-            _deviceTransferStats.update { it.copy(currentFileName = fileName) }
-            Log.i(TAG, "Initiating photo download for handle 0x${handle.toString(16)} -> $fileName (size: $expectedSize bytes)")
+                    // For the 2nd file in a batch, verify with camera that an object is actually in memory
+                    // to prevent calling getObjectInfo on an empty RAM buffer (which crashes Sony firmware)
+                    if (downloadedInBatch == 1) {
+                        val hasSecond = d.hasObjectInMemory()
+                        Log.i(TAG, "Checking for 2nd file in RAM (RAW+JPEG check): hasObjectInMemory=$hasSecond")
+                        if (!hasSecond) {
+                            Log.i(TAG, "No 2nd file in camera RAM. Shutter batch complete.")
+                            break
+                        }
+                    }
 
-            val storageDir = File(context.getExternalFilesDir(null), "tether_captures").apply { mkdirs() }
-            val targetFile = File(storageDir, fileName)
+                    val info = d.getObjectInfo(currentHandle)
+                    if (info == null) {
+                        Log.d(TAG, "No object ready at handle 0x${currentHandle.toString(16)}")
+                        break
+                    }
 
-            val success = d.downloadObject(handle, targetFile, expectedSize)
-            if (success && targetFile.exists() && targetFile.length() > 0) {
-                Log.i(TAG, "Photo downloaded successfully to phone: ${targetFile.absolutePath} (${targetFile.length()} bytes)")
-                _deviceTransferStats.update {
-                    it.copy(
-                        pendingTransfer = maxOf(0, it.pendingTransfer - 1),
-                        completedTransfer = it.completedTransfer + 1,
-                        currentFileName = null
-                    )
+                    val fileName = info.first.takeIf { it.isNotBlank() } ?: "DSC_${System.currentTimeMillis()}.JPG"
+                    val expectedSize = info.second
+                    val isJpeg = fileName.endsWith(".jpg", ignoreCase = true) || fileName.endsWith(".jpeg", ignoreCase = true)
+                    val isRaw = fileName.endsWith(".arw", ignoreCase = true)
+
+                    if (downloadedInBatch == 0) {
+                        firstWasJpeg = isJpeg
+                        firstWasRaw = isRaw
+                    }
+
+                    _deviceTransferStats.update {
+                        it.copy(
+                            totalCaptured = it.totalCaptured + 1,
+                            pendingTransfer = it.pendingTransfer + 1,
+                            currentFileName = fileName
+                        )
+                    }
+                    Log.i(TAG, "Initiating download [batch item ${downloadedInBatch + 1}] handle 0x${currentHandle.toString(16)} -> $fileName (size: $expectedSize bytes)")
+
+                    val sessionFolder = com.fastup.FastUpApp.instance.uploadManager.currentSessionId.trim().ifEmpty { "weddings" }
+                    val storageDir = File(context.getExternalFilesDir(null), "tether_captures/$sessionFolder").apply { mkdirs() }
+                    val targetFile = File(storageDir, fileName)
+
+                    val success = d.downloadObject(currentHandle, targetFile, expectedSize)
+                    if (success && targetFile.exists() && targetFile.length() > 0) {
+                        downloadedInBatch++
+                        Log.i(TAG, "Photo downloaded successfully ($downloadedInBatch in batch): ${targetFile.absolutePath} (${targetFile.length()} bytes)")
+                        _deviceTransferStats.update {
+                            it.copy(
+                                pendingTransfer = maxOf(0, it.pendingTransfer - 1),
+                                completedTransfer = it.completedTransfer + 1,
+                                currentFileName = null
+                            )
+                        }
+                        withContext(Dispatchers.Main) {
+                            onPhotoCaptured(targetFile)
+                        }
+                    } else {
+                        Log.w(TAG, "Photo download for handle 0x${currentHandle.toString(16)} returned false or empty file")
+                        _deviceTransferStats.update {
+                            it.copy(
+                                pendingTransfer = maxOf(0, it.pendingTransfer - 1),
+                                failedTransfer = it.failedTransfer + 1,
+                                currentFileName = null
+                            )
+                        }
+                        if (targetFile.exists() && targetFile.length() == 0L) {
+                            targetFile.delete()
+                        }
+                        break
+                    }
+
+                    // If we have already downloaded both a RAW and a JPEG for this shot, the batch is 100% complete!
+                    if ((firstWasJpeg && isRaw) || (firstWasRaw && isJpeg) || downloadedInBatch >= 2) {
+                        Log.i(TAG, "Both RAW and JPEG downloaded for this shot. Shutter batch complete.")
+                        break
+                    }
+
+                    // For the 2nd file, target PHOTO_OBJECT_HANDLE
+                    currentHandle = SonyPtpConstants.PHOTO_OBJECT_HANDLE
                 }
-                withContext(Dispatchers.Main) {
-                    onPhotoCaptured(targetFile)
-                }
-            } else {
-                Log.w(TAG, "Photo download for handle 0x${handle.toString(16)} returned false or empty file")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error downloading captured objects", e)
                 _deviceTransferStats.update {
                     it.copy(
                         pendingTransfer = maxOf(0, it.pendingTransfer - 1),
@@ -335,21 +395,10 @@ class UsbCameraManager(
                         currentFileName = null
                     )
                 }
-                if (targetFile.exists() && targetFile.length() == 0L) {
-                    targetFile.delete()
-                }
+            } finally {
+                com.fastup.FastUpApp.instance.uploadManager.refreshLocalFolders()
+                _connectionState.value = CameraConnectionState.CONNECTED
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error downloading captured object 0x${handle.toString(16)}", e)
-            _deviceTransferStats.update {
-                it.copy(
-                    pendingTransfer = maxOf(0, it.pendingTransfer - 1),
-                    failedTransfer = it.failedTransfer + 1,
-                    currentFileName = null
-                )
-            }
-        } finally {
-            _connectionState.value = CameraConnectionState.CONNECTED
         }
     }
 

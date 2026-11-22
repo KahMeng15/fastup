@@ -78,20 +78,24 @@ class UsbTetherService : Service() {
 
     private fun processCapturedFile(file: File) {
         scope.launch {
+            val isRaw = file.name.endsWith(".arw", ignoreCase = true)
+            val isJpeg = file.name.endsWith(".jpg", ignoreCase = true) || file.name.endsWith(".jpeg", ignoreCase = true)
             val thumbDir = File(cacheDir, "previews").apply { mkdirs() }
-            val preview = if (file.name.endsWith(".arw", ignoreCase = true)) {
+            val preview = if (isRaw) {
                 ArwParser.extractPreview(file, thumbDir)
             } else {
                 file
             }
             val exif = ArwParser.extractExif(file)
 
+            val baseName = file.nameWithoutExtension
+
             val photoItem = PhotoItem(
-                id = UUID.randomUUID().toString(),
+                id = baseName,
                 fileName = file.name,
                 localFile = file,
-                rawFile = if (file.name.endsWith(".arw", ignoreCase = true)) file else null,
-                jpegFile = if (file.name.endsWith(".jpg", ignoreCase = true)) file else null,
+                rawFile = if (isRaw) file else null,
+                jpegFile = if (isJpeg) file else null,
                 previewFile = preview,
                 fileSize = file.length(),
                 status = UploadStatus.PENDING,

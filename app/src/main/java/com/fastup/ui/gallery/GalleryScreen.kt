@@ -118,7 +118,7 @@ fun PhotoGridItem(photo: PhotoItem, onClick: () -> Unit) {
             modifier = Modifier.fillMaxSize()
         )
 
-        // Format Badge (RAW / JPG)
+        // Format Badge (RAW / JPG / RAW+JPG)
         Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -126,8 +126,13 @@ fun PhotoGridItem(photo: PhotoItem, onClick: () -> Unit) {
                 .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(4.dp))
                 .padding(horizontal = 4.dp, vertical = 2.dp)
         ) {
+            val badgeText = when {
+                photo.rawFile != null && photo.jpegFile != null -> "RAW+JPG"
+                photo.isRaw -> "RAW"
+                else -> "JPG"
+            }
             Text(
-                text = if (photo.isRaw) "RAW" else "JPG",
+                text = badgeText,
                 color = if (photo.isRaw) Amber500 else Slate100,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold

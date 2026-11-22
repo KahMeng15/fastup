@@ -33,6 +33,7 @@ class MainViewModel : ViewModel() {
 
     val photos: StateFlow<List<PhotoItem>> = uploadManager.photos
     val isUploading: StateFlow<Boolean> = uploadManager.isUploading
+    val isUploadPaused: StateFlow<Boolean> = uploadManager.isUploadPaused
     val shareSession: StateFlow<ShareSessionInfo?> = uploadManager.shareSession
 
     private val _cameraState = MutableStateFlow(CameraConnectionState.DISCONNECTED)
@@ -56,6 +57,8 @@ class MainViewModel : ViewModel() {
         set(value) {
             uploadManager.apiKey = value
         }
+
+    val photographerName: StateFlow<String?> = uploadManager.photographerName
 
     val currentSessionId: StateFlow<String> = uploadManager.currentSessionIdFlow
 
@@ -161,6 +164,14 @@ class MainViewModel : ViewModel() {
         usbCameraManager?.scanForCamera()
     }
 
+    fun forceStopUpload() {
+        uploadManager.forceStopUpload()
+    }
+
+    fun startUpload() {
+        uploadManager.startUpload()
+    }
+
     fun retryFailed() {
         uploadManager.retryFailed()
     }
@@ -182,6 +193,35 @@ class MainViewModel : ViewModel() {
             val res = uploadManager.apiClient.cleanupSession(sessionId)
             onDone(res.isSuccess)
         }
+    }
+
+    val localFolders: StateFlow<List<com.fastup.upload.LocalFolderInfo>> = uploadManager.localFolders
+
+    fun refreshLocalFolders() {
+        uploadManager.refreshLocalFolders()
+    }
+
+    fun clearLocalStorage(folderId: String, onDone: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val success = uploadManager.clearLocalStorage(folderId)
+            onDone(success)
+        }
+    }
+
+    fun pairWithOtp(targetServerUrl: String, otpCode: String, onDone: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            val res = uploadManager.apiClient.claimOtp(targetServerUrl, otpCode)
+            res.onSuccess { claimResult ->
+                uploadManager.applyClaimedOtp(claimResult)
+                onDone(Result.success(claimResult.photographerName))
+            }.onFailure { err ->
+                onDone(Result.failure(err))
+            }
+        }
+    }
+
+    fun disconnectPhotographer() {
+        uploadManager.disconnectPhotographer()
     }
 
     private fun formatSpeed(bytesPerSec: Long): String {

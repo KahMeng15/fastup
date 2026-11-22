@@ -40,6 +40,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
     val deviceStats by viewModel.deviceTransferStats.collectAsState()
     val shareSession by viewModel.shareSession.collectAsState()
     val isUploading by viewModel.isUploading.collectAsState()
+    val isUploadPaused by viewModel.isUploadPaused.collectAsState()
     val targetFolder by viewModel.currentSessionId.collectAsState()
 
     var showFolderDialog by remember { mutableStateOf(false) }
@@ -254,12 +255,31 @@ fun DashboardScreen(viewModel: MainViewModel) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Upload Pipeline",
-                        color = Slate100,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 16.sp
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Upload Pipeline",
+                            color = Slate100,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 16.sp
+                        )
+                        if (isUploadPaused) {
+                            Surface(
+                                color = Amber500.copy(alpha = 0.2f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    text = "PAUSED",
+                                    color = Amber500,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
                     // Transfer Speed Readout
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -313,6 +333,19 @@ fun DashboardScreen(viewModel: MainViewModel) {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Retry ${stats.failedCount} Failed Uploads")
+                    }
+                }
+
+                // Paused Resume Button
+                if (isUploadPaused) {
+                    Button(
+                        onClick = { viewModel.startUpload() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Emerald500),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Resume Upload Pipeline", fontWeight = FontWeight.Bold)
                     }
                 }
             }

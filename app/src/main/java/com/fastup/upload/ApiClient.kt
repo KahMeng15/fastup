@@ -15,17 +15,46 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+data class ClaimOtpResult(
+    val token: String,
+    val photographerName: String,
+    val folderPath: String,
+    val serverUrl: String,
+    val uploadFormat: String,
+    val autoUpload: Boolean,
+    val wifiOnly: Boolean
+)
+
 class ApiClient(
     var baseUrl: String = "http://10.0.0.43:8000",
     var apiKey: String = "fastup_secret_key"
 ) {
 
     private val client = OkHttpClient.Builder()
+        .addInterceptor { chain ->
+            val original = chain.request()
+            val baseOrigin = cleanUrl("").removeSuffix("/")
+            val proto = if (baseOrigin.startsWith("https", ignoreCase = true)) "https" else "http"
+            val requestBuilder = original.newBuilder()
+                .header("x-forwarded-proto", proto)
+                .header("Origin", baseOrigin)
+            chain.proceed(requestBuilder.build())
+        }
         .connectTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
+
+    @Volatile
+    private var activeUploadCall: okhttp3.Call? = null
+
+    fun cancelCurrentUpload() {
+        try {
+            activeUploadCall?.cancel()
+        } catch (_: Exception) {}
+        activeUploadCall = null
+    }
 
     private fun cleanUrl(endpoint: String): String {
         val base = baseUrl.trimEnd('/')
@@ -43,8 +72,13 @@ class ApiClient(
         onProgress: (bytesWritten: Long, totalBytes: Long) -> Unit
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val validSessionId = sessionId.trim().ifEmpty { "weddings/staging" }
-            val mediaType = if (file.name.endsWith(".arw", ignoreCase = true)) {
+            val validSessionId = sessionId.trim().ifEmpty { "weddings" }
+            val uploadFileName = if (file.name.endsWith("_thumb.jpg", ignoreCase = true)) {
+                file.name.replace(Regex("_thumb\\.jpg$", RegexOption.IGNORE_CASE), ".jpg")
+            } else {
+                file.name
+            }
+            val mediaType = if (uploadFileName.endsWith(".arw", ignoreCase = true)) {
                 "application/octet-stream".toMediaTypeOrNull()
             } else {
                 "image/jpeg".toMediaTypeOrNull()
@@ -60,28 +94,40 @@ class ApiClient(
                 .addFormDataPart("folderPath", validSessionId)
                 .addFormDataPart(
                     "file",
-                    file.name,
+                    uploadFileName,
                     progressBody
                 )
                 .build()
 
             val encodedSessionId = java.net.URLEncoder.encode(validSessionId, "UTF-8")
+            val baseOrigin = cleanUrl("").removeSuffix("/")
+            val proto = if (baseOrigin.startsWith("https", ignoreCase = true)) "https" else "http"
             val request = Request.Builder()
                 .url(cleanUrl("api/staging/upload?sessionId=$encodedSessionId"))
                 .addHeader("x-api-key", apiKey)
                 .addHeader("x-staging-key", apiKey)
+                .addHeader("x-photographer-token", apiKey)
+                .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("x-session-id", validSessionId)
+                .addHeader("x-forwarded-proto", proto)
+                .addHeader("Origin", baseOrigin)
                 .post(multipartBody)
                 .build()
 
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val err = response.body?.string() ?: "HTTP ${response.code}"
-                    Result.failure(IOException("Upload failed (${response.code}): $err"))
-                } else {
-                    val respStr = response.body?.string() ?: ""
-                    Result.success(respStr)
+            val call = client.newCall(request)
+            activeUploadCall = call
+            try {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) {
+                        val err = response.body?.string() ?: "HTTP ${response.code}"
+                        Result.failure(IOException("Upload failed (${response.code}): $err"))
+                    } else {
+                        val respStr = response.body?.string() ?: ""
+                        Result.success(respStr)
+                    }
                 }
+            } finally {
+                activeUploadCall = null
             }
         } catch (e: Exception) {
             Log.e("ApiClient", "Error uploading photo ${file.name}", e)
@@ -145,9 +191,11 @@ class ApiClient(
                 put("folderPath", cleanPath)
             }
             val body = json.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+            val baseOrigin = cleanUrl("").removeSuffix("/")
             val request = Request.Builder()
                 .url(cleanUrl("api/staging/folders"))
                 .addHeader("x-api-key", apiKey)
+                .addHeader("Origin", baseOrigin)
                 .post(body)
                 .build()
 
@@ -228,6 +276,63 @@ class ApiClient(
             }
         } catch (e: Exception) {
             Log.e("ApiClient", "Error cleaning up session $sessionId", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Claim 6-digit OTP code to receive scoped photographer token and predefined settings.
+     * POST /api/staging/otp/claim
+     */
+    suspend fun claimOtp(targetServerUrl: String, otpCode: String): Result<ClaimOtpResult> = withContext(Dispatchers.IO) {
+        try {
+            val base = targetServerUrl.trimEnd('/')
+            val endpoint = "$base/api/staging/otp/claim"
+            val json = JSONObject().apply {
+                put("otp", otpCode.trim())
+            }
+            val body = json.toString().toRequestBody("application/json".toMediaTypeOrNull())
+
+            val request = Request.Builder()
+                .url(endpoint)
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val respStr = response.body?.string() ?: ""
+                if (!response.isSuccessful) {
+                    val err = try {
+                        JSONObject(respStr).optString("error", respStr)
+                    } catch (_: Exception) {
+                        respStr
+                    }
+                    Result.failure(IOException(if (err.isNotBlank()) err else "Pairing failed (${response.code})"))
+                } else {
+                    val jsonObj = JSONObject(respStr)
+                    val token = jsonObj.getString("token")
+                    val photographerName = jsonObj.optString("photographerName", "Photographer")
+                    val folderPath = jsonObj.optString("folderPath", "weddings")
+                    val settings = jsonObj.optJSONObject("settings")
+                    val sUrl = settings?.optString("serverUrl")?.ifBlank { targetServerUrl } ?: targetServerUrl
+                    val sFormat = settings?.optString("uploadFormat", "JPEG_ONLY") ?: "JPEG_ONLY"
+                    val sAuto = settings?.optBoolean("autoUpload", true) ?: true
+                    val sWifi = settings?.optBoolean("wifiOnly", false) ?: false
+
+                    Result.success(
+                        ClaimOtpResult(
+                            token = token,
+                            photographerName = photographerName,
+                            folderPath = folderPath,
+                            serverUrl = sUrl,
+                            uploadFormat = sFormat,
+                            autoUpload = sAuto,
+                            wifiOnly = sWifi
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("ApiClient", "Error claiming OTP code", e)
             Result.failure(e)
         }
     }
