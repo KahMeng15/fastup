@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,7 +47,9 @@ class UsbCameraManager(
 ) {
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var loopJob: Job? = null
+    private var eventJob: Job? = null
+    private var downloadJob: Job? = null
+    private var photoChannel = Channel<Int>(Channel.UNLIMITED)
 
     private var currentDevice: UsbDevice? = null
     private var driver: SonyPtpDriver? = null
@@ -240,9 +243,8 @@ class UsbCameraManager(
             // Attempt opening session (with 1 retry if camera endpoint was busy)
             var opened = pDriver.openSession()
             if (!opened) {
-                Log.w(TAG, "First openSession attempt failed, retrying after reset...")
-                delay(400)
-                pDriver.clearHalt()
+                Log.w(TAG, "First openSession attempt failed, retrying after delay...")
+                delay(500)
                 opened = pDriver.openSession()
             }
 
@@ -262,9 +264,14 @@ class UsbCameraManager(
         }
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun startMonitoringLoop() {
-        loopJob?.cancel()
-        loopJob = scope.launch {
+        eventJob?.cancel()
+        downloadJob?.cancel()
+        photoChannel = Channel(Channel.UNLIMITED)
+
+        // Coroutine 1: Continuous PTP Interrupt Endpoint Poller (never blocked by file downloads)
+        eventJob = scope.launch {
             Log.i(TAG, "Starting PTP event loop on Interrupt endpoint...")
             while (isActive && _connectionState.value != CameraConnectionState.DISCONNECTED && _connectionState.value != CameraConnectionState.ERROR) {
                 val d = driver ?: break
@@ -286,120 +293,129 @@ class UsbCameraManager(
                         } else {
                             SonyPtpConstants.PHOTO_OBJECT_HANDLE
                         }
-                        drainPendingObjects(targetHandle)
+                        photoChannel.trySend(targetHandle)
+                    } else if (eventCode == 0xC202) {
+                        Log.i(TAG, "Sony Camera reported capture complete (0xC202)")
                     }
                 }
+            }
+        }
 
-                delay(50)
+        // Coroutine 2: Dedicated Photo Download Worker (processes queued captures one by one)
+        downloadJob = scope.launch {
+            Log.i(TAG, "Starting photo download worker...")
+            for (targetHandle in photoChannel) {
+                if (!isActive || _connectionState.value == CameraConnectionState.DISCONNECTED) break
+                downloadCapturedPhoto(targetHandle)
+
+                // If channel is currently empty, check if an un-notified companion object (e.g. RAW companion) is in RAM
+                val d = driver
+                if (photoChannel.isEmpty && d != null) {
+                    delay(150)
+                    if (d.hasObjectInMemory()) {
+                        Log.i(TAG, "Additional companion object in camera RAM (RAW+JPEG). Queuing download.")
+                        photoChannel.trySend(SonyPtpConstants.PHOTO_OBJECT_HANDLE)
+                    }
+                }
             }
         }
     }
 
-    private suspend fun drainPendingObjects(triggerHandle: Int) {
+    private suspend fun downloadCapturedPhoto(handle: Int) {
         transferMutex.withLock {
             val d = driver ?: return@withLock
-            var currentHandle = triggerHandle
-            var downloadedCount = 0
-
             try {
-                while (scope.isActive && _connectionState.value != CameraConnectionState.DISCONNECTED) {
-                    // Stabilization delay before requesting object info
-                    delay(150)
+                // Short stabilization delay before querying object info
+                delay(100)
 
-                    val info = d.getObjectInfo(currentHandle)
-                    if (info == null) {
-                        // If this was the first file of an event and failed, break.
-                        // If we already downloaded a file (e.g. JPEG), give camera 300ms to ready the RAW.
-                        if (downloadedCount == 1) {
-                            delay(300)
-                            val secondInfo = d.getObjectInfo(SonyPtpConstants.PHOTO_OBJECT_HANDLE)
-                            if (secondInfo != null) {
-                                currentHandle = SonyPtpConstants.PHOTO_OBJECT_HANDLE
-                                continue
-                            }
+                val info = d.getObjectInfo(handle)
+                if (info == null) {
+                    Log.w(TAG, "No object ready at handle 0x${handle.toString(16)}")
+                    return@withLock
+                }
+
+                val fileName = info.first.takeIf { it.isNotBlank() } ?: "DSC_${System.currentTimeMillis()}.JPG"
+                val expectedSize = info.second
+
+                _connectionState.value = CameraConnectionState.CAPTURING
+                _deviceTransferStats.update {
+                    it.copy(
+                        totalCaptured = it.totalCaptured + 1,
+                        pendingTransfer = it.pendingTransfer + 1,
+                        currentFileName = fileName
+                    )
+                }
+                Log.i(TAG, "Downloading photo handle 0x${handle.toString(16)} -> $fileName (size: $expectedSize bytes)")
+
+                val sessionFolder = com.fastup.FastUpApp.instance.uploadManager.currentSessionId.trim().ifEmpty { "weddings" }
+                val storageDir = File(context.getExternalFilesDir(null), "tether_captures/$sessionFolder").apply { mkdirs() }
+                val targetFile = File(storageDir, fileName)
+
+                var lastSpeedUpdate = System.currentTimeMillis()
+                var lastBytesTransferred = 0L
+
+                val success = d.downloadObject(handle, targetFile, expectedSize) { bytesRead, totalBytes ->
+                    val now = System.currentTimeMillis()
+                    val dt = now - lastSpeedUpdate
+                    if (dt >= 200) {
+                        val speed = if (dt > 0) ((bytesRead - lastBytesTransferred) * 1000L) / dt else 0L
+                        lastSpeedUpdate = now
+                        lastBytesTransferred = bytesRead
+                        val prog = if (totalBytes > 0) bytesRead.toFloat() / totalBytes else 0f
+                        _deviceTransferStats.update {
+                            it.copy(
+                                speedBps = speed,
+                                speedFormatted = formatSpeed(speed),
+                                overallProgress = if (it.totalCaptured > 0) (it.completedTransfer.toFloat() + prog) / it.totalCaptured else prog
+                            )
                         }
-                        break
                     }
+                }
 
-                    val fileName = info.first.takeIf { it.isNotBlank() } ?: "DSC_${System.currentTimeMillis()}.JPG"
-                    val expectedSize = info.second
-
-                    _connectionState.value = CameraConnectionState.CAPTURING
+                if (success && targetFile.exists() && targetFile.length() > 0) {
+                    Log.i(TAG, "Photo downloaded successfully: ${targetFile.absolutePath} (${targetFile.length()} bytes)")
                     _deviceTransferStats.update {
+                        val newCompleted = it.completedTransfer + 1
+                        val total = it.totalCaptured
+                        val prog = if (total > 0) newCompleted.toFloat() / total else 1f
                         it.copy(
-                            totalCaptured = it.totalCaptured + 1,
-                            pendingTransfer = it.pendingTransfer + 1,
-                            currentFileName = fileName
+                            pendingTransfer = maxOf(0, it.pendingTransfer - 1),
+                            completedTransfer = newCompleted,
+                            currentFileName = null,
+                            speedBps = 0L,
+                            speedFormatted = "0 kB/s",
+                            overallProgress = prog
                         )
                     }
-                    Log.i(TAG, "Draining buffer object handle 0x${currentHandle.toString(16)} -> $fileName (size: $expectedSize bytes)")
-
-                    val sessionFolder = com.fastup.FastUpApp.instance.uploadManager.currentSessionId.trim().ifEmpty { "weddings" }
-                    val storageDir = File(context.getExternalFilesDir(null), "tether_captures/$sessionFolder").apply { mkdirs() }
-                    val targetFile = File(storageDir, fileName)
-
-                    var lastSpeedUpdate = System.currentTimeMillis()
-                    var lastBytesTransferred = 0L
-
-                    val success = d.downloadObject(currentHandle, targetFile, expectedSize) { bytesRead, totalBytes ->
-                        val now = System.currentTimeMillis()
-                        val dt = now - lastSpeedUpdate
-                        if (dt >= 200) {
-                            val speed = if (dt > 0) ((bytesRead - lastBytesTransferred) * 1000L) / dt else 0L
-                            lastSpeedUpdate = now
-                            lastBytesTransferred = bytesRead
-                            val prog = if (totalBytes > 0) bytesRead.toFloat() / totalBytes else 0f
-                            _deviceTransferStats.update {
-                                it.copy(
-                                    speedBps = speed,
-                                    speedFormatted = formatSpeed(speed),
-                                    overallProgress = if (it.totalCaptured > 0) (it.completedTransfer.toFloat() + prog) / it.totalCaptured else prog
-                                )
-                            }
-                        }
+                    withContext(Dispatchers.Main) {
+                        onPhotoCaptured(targetFile)
                     }
-
-                    if (success && targetFile.exists() && targetFile.length() > 0) {
-                        downloadedCount++
-                        Log.i(TAG, "Photo downloaded successfully: ${targetFile.absolutePath} (${targetFile.length()} bytes)")
-                        _deviceTransferStats.update {
-                            val newCompleted = it.completedTransfer + 1
-                            val total = it.totalCaptured
-                            val prog = if (total > 0) newCompleted.toFloat() / total else 1f
-                            it.copy(
-                                pendingTransfer = maxOf(0, it.pendingTransfer - 1),
-                                completedTransfer = newCompleted,
-                                currentFileName = null,
-                                speedBps = 0L,
-                                speedFormatted = "0 kB/s",
-                                overallProgress = prog
-                            )
-                        }
-                        withContext(Dispatchers.Main) {
-                            onPhotoCaptured(targetFile)
-                        }
-                    } else {
-                        Log.w(TAG, "Photo download for handle 0x${currentHandle.toString(16)} returned false or empty file")
-                        _deviceTransferStats.update {
-                            it.copy(
-                                pendingTransfer = maxOf(0, it.pendingTransfer - 1),
-                                failedTransfer = it.failedTransfer + 1,
-                                currentFileName = null,
-                                speedBps = 0L,
-                                speedFormatted = "0 kB/s"
-                            )
-                        }
-                        if (targetFile.exists() && targetFile.length() == 0L) {
-                            targetFile.delete()
-                        }
-                        break
+                } else {
+                    Log.w(TAG, "Photo download for handle 0x${handle.toString(16)} returned false or empty file")
+                    _deviceTransferStats.update {
+                        it.copy(
+                            pendingTransfer = maxOf(0, it.pendingTransfer - 1),
+                            failedTransfer = it.failedTransfer + 1,
+                            currentFileName = null,
+                            speedBps = 0L,
+                            speedFormatted = "0 kB/s"
+                        )
                     }
-
-                    // For any subsequent queued file in camera RAM, target PHOTO_OBJECT_HANDLE
-                    currentHandle = SonyPtpConstants.PHOTO_OBJECT_HANDLE
+                    if (targetFile.exists() && targetFile.length() == 0L) {
+                        targetFile.delete()
+                    }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error in drainPendingObjects", e)
+                Log.e(TAG, "Error downloading captured object 0x${handle.toString(16)}", e)
+                _deviceTransferStats.update {
+                    it.copy(
+                        pendingTransfer = maxOf(0, it.pendingTransfer - 1),
+                        failedTransfer = it.failedTransfer + 1,
+                        currentFileName = null,
+                        speedBps = 0L,
+                        speedFormatted = "0 kB/s"
+                    )
+                }
             } finally {
                 com.fastup.FastUpApp.instance.uploadManager.refreshLocalFolders()
                 if (_connectionState.value == CameraConnectionState.CAPTURING) {
@@ -411,8 +427,10 @@ class UsbCameraManager(
 
     fun disconnect() {
         _connectionState.value = CameraConnectionState.DISCONNECTED
-        loopJob?.cancel()
-        loopJob = null
+        eventJob?.cancel()
+        eventJob = null
+        downloadJob?.cancel()
+        downloadJob = null
         try {
             driver?.closeSession()
         } catch (e: Exception) {

@@ -43,7 +43,6 @@ class SonyPtpDriver(
      */
     fun openSession(): Boolean {
         try {
-            clearHalt()
             transactionId = 1
 
             // Per PTP standard ISO 15740: transactionId for OpenSession MUST be 0x00000000
@@ -121,7 +120,7 @@ class SonyPtpDriver(
             val header = PtpPacket.parseHeader(buffer)
             if (header.type == SonyPtpConstants.PTP_CONTAINER_EVENT) {
                 var param1: Int? = null
-                if (header.length >= 16) {
+                if (header.length >= 16 && read >= 16) {
                     val bb = ByteBuffer.wrap(buffer, 12, 4).order(ByteOrder.LITTLE_ENDIAN)
                     param1 = bb.int
                 }
@@ -156,14 +155,17 @@ class SonyPtpDriver(
                 return false
             }
 
-            val payloadLen = read - PtpPacket.HEADER_SIZE
-            val value = if (payloadLen >= 2) {
+            val dataLen = header.length.toInt()
+            val payloadLen = dataLen - PtpPacket.HEADER_SIZE
+            val value = if (payloadLen >= 2 && read >= PtpPacket.HEADER_SIZE + 2) {
                 val bb = ByteBuffer.wrap(buffer, PtpPacket.HEADER_SIZE, 2).order(ByteOrder.LITTLE_ENDIAN)
                 bb.short.toInt() and 0xFFFF
             } else 0
 
-            // Consume trailing response container
-            readTransactionResponse()
+            // If trailing response container wasn't already concatenated in this packet, consume it
+            if (read < dataLen + PtpPacket.HEADER_SIZE) {
+                readTransactionResponse(timeoutMs = 1000)
+            }
 
             Log.d(TAG, "Sony ObjectInMemory (0xD215) value: 0x${value.toString(16)} ($value)")
             (value > 0x8000) || (value and 0x8000 != 0)
@@ -418,9 +420,9 @@ class SonyPtpDriver(
      * Reads the transaction response. If a DATA container (type 2) arrives, it consumes the data
      * payload and then reads the trailing RESPONSE container (type 3).
      */
-    private fun readTransactionResponse(): PtpHeader? {
+    private fun readTransactionResponse(timeoutMs: Int = 2000): PtpHeader? {
         val buffer = ByteArray(4096)
-        val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 5000)
+        val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, timeoutMs)
         if (read < PtpPacket.HEADER_SIZE) return null
         var header = PtpPacket.parseHeader(buffer)
 
@@ -429,12 +431,12 @@ class SonyPtpDriver(
             var bytesRead = read - PtpPacket.HEADER_SIZE
             while (bytesRead < totalDataLen) {
                 val toRead = minOf(buffer.size, totalDataLen - bytesRead)
-                val chunk = connection.bulkTransfer(bulkIn, buffer, toRead, 5000)
+                val chunk = connection.bulkTransfer(bulkIn, buffer, toRead, timeoutMs)
                 if (chunk <= 0) break
                 bytesRead += chunk
             }
             // Read trailing response container
-            val respRead = connection.bulkTransfer(bulkIn, buffer, buffer.size, 5000)
+            val respRead = connection.bulkTransfer(bulkIn, buffer, buffer.size, timeoutMs)
             if (respRead >= PtpPacket.HEADER_SIZE) {
                 header = PtpPacket.parseHeader(buffer)
             }
