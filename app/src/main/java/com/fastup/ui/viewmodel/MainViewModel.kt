@@ -52,7 +52,7 @@ class MainViewModel : ViewModel() {
     private val _deviceTransferStats = MutableStateFlow(com.fastup.usb.DeviceTransferStats())
     val deviceTransferStats: StateFlow<com.fastup.usb.DeviceTransferStats> = _deviceTransferStats.asStateFlow()
 
-    private val _serverAvailableStorage = MutableStateFlow("Available")
+    private val _serverAvailableStorage = MutableStateFlow("Online")
     val serverAvailableStorage: StateFlow<String> = _serverAvailableStorage.asStateFlow()
 
     init {
@@ -117,6 +117,12 @@ class MainViewModel : ViewModel() {
     fun selectServerFolder(folderPath: String) {
         uploadManager.currentSessionId = folderPath
     }
+
+    var cameraCaptureFormat: com.fastup.model.CameraCaptureFormat
+        get() = uploadManager.cameraCaptureFormat
+        set(value) {
+            uploadManager.cameraCaptureFormat = value
+        }
 
     var uploadFormat: UploadFormat
         get() = uploadManager.uploadFormat
@@ -188,7 +194,7 @@ class MainViewModel : ViewModel() {
 
     private fun formatStorageBytes(bytes: Long): String {
         return when {
-            bytes >= 1024L * 1024L * 1024L -> String.format(java.util.Locale.US, "%.1f GB", bytes.toDouble() / (1024L * 1024L * 1024L))
+            bytes >= 1024L * 1024L * 1024L -> String.format(java.util.Locale.US, "%.0f GB", bytes.toDouble() / (1024L * 1024L * 1024L))
             bytes >= 1024L * 1024L -> String.format(java.util.Locale.US, "%.0f MB", bytes.toDouble() / (1024L * 1024L))
             bytes >= 1024L -> String.format(java.util.Locale.US, "%.0f kB", bytes.toDouble() / 1024L)
             bytes > 0L -> "$bytes B"

@@ -45,6 +45,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
     var urlInput by remember { mutableStateOf(viewModel.serverUrl) }
     var apiKeyInput by remember { mutableStateOf(viewModel.apiKey) }
+    var selectedCameraFormat by remember { mutableStateOf(viewModel.cameraCaptureFormat) }
     var selectedFormat by remember { mutableStateOf(viewModel.uploadFormat) }
     var autoUpload by remember { mutableStateOf(viewModel.autoUpload) }
     var wifiOnly by remember { mutableStateOf(viewModel.wifiOnly) }
@@ -251,6 +252,52 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Force Stop Upload", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Camera Shooting Format Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Slate800),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Camera Shooting Format",
+                    color = Slate100,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp
+                )
+                Text(
+                    text = "Select what your camera is set to shoot (RAW+JPEG drains both files over USB without hanging the camera)",
+                    color = Slate400,
+                    fontSize = 12.sp
+                )
+
+                com.fastup.model.CameraCaptureFormat.values().forEach { format ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = selectedCameraFormat == format,
+                            onClick = {
+                                selectedCameraFormat = format
+                                viewModel.cameraCaptureFormat = format
+                            },
+                            colors = RadioButtonDefaults.colors(selectedColor = Blue500)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = format.label, color = Slate100, fontSize = 15.sp)
                     }
                 }
             }

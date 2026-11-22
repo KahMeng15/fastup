@@ -16,11 +16,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
@@ -31,9 +35,7 @@ import com.fastup.ui.gallery.GalleryScreen
 import com.fastup.ui.gallery.PhotoDetailScreen
 import com.fastup.ui.navigation.Screen
 import com.fastup.ui.settings.SettingsScreen
-import com.fastup.ui.theme.FastUpTheme
-import com.fastup.ui.theme.Slate800
-import com.fastup.ui.theme.Slate900
+import com.fastup.ui.theme.*
 import com.fastup.ui.viewmodel.MainViewModel
 
 class MainActivity : ComponentActivity() {
@@ -66,6 +68,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        window.statusBarColor = android.graphics.Color.BLACK
+        window.navigationBarColor = android.graphics.Color.BLACK
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
 
         checkAndRequestPermissions()
         startAndBindService()
@@ -148,18 +157,29 @@ fun MainAppScaffold(viewModel: MainViewModel) {
     val showBottomBar = currentRoute in items.map { it.route }
 
     Scaffold(
-        containerColor = Slate900,
+        containerColor = PureBlack,
         bottomBar = {
             if (showBottomBar) {
                 NavigationBar(
-                    containerColor = Slate800,
-                    contentColor = MaterialTheme.colorScheme.primary
+                    containerColor = PureBlack,
+                    contentColor = Slate100,
+                    tonalElevation = 0.dp,
+                    modifier = Modifier.border(
+                        androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+                    )
                 ) {
                     items.forEach { screen ->
                         NavigationBarItem(
                             icon = { Icon(screen.icon, contentDescription = screen.title) },
-                            label = { Text(screen.title) },
+                            label = { Text(screen.title, fontSize = 11.sp) },
                             selected = currentRoute == screen.route,
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = Blue400,
+                                selectedTextColor = Slate100,
+                                unselectedIconColor = Slate500,
+                                unselectedTextColor = Slate500,
+                                indicatorColor = DarkSurfaceVariant
+                            ),
                             onClick = {
                                 navController.navigate(screen.route) {
                                     popUpTo(navController.graph.findStartDestination().id) {

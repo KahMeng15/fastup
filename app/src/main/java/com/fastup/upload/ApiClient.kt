@@ -401,4 +401,36 @@ class ApiClient(
             Result.success("Available")
         }
     }
+
+    /**
+     * Fetch list of all filenames already uploaded for a session.
+     * GET /api/staging/:sessionId
+     */
+    suspend fun fetchSessionUploadedFiles(sessionId: String): Set<String> = withContext(Dispatchers.IO) {
+        try {
+            val endpoint = cleanUrl("api/staging/${sessionId.trim().trimStart('/')}")
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("x-api-key", apiKey)
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptySet()
+                val bodyStr = response.body?.string() ?: return@withContext emptySet()
+                val obj = JSONObject(bodyStr)
+                val photosArr = obj.optJSONArray("photos") ?: obj.optJSONArray("files") ?: return@withContext emptySet()
+                val set = mutableSetOf<String>()
+                for (i in 0 until photosArr.length()) {
+                    val f = photosArr.getJSONObject(i)
+                    val name = f.optString("file_name").ifBlank { f.optString("fileName") }
+                    if (name.isNotBlank()) set.add(name)
+                }
+                set
+            }
+        } catch (e: Exception) {
+            Log.w("ApiClient", "Error fetching session uploaded files: ${e.message}")
+            emptySet()
+        }
+    }
 }

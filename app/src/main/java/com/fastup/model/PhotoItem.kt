@@ -15,6 +15,12 @@ enum class UploadFormat(val label: String) {
     RAW_ONLY("RAW only")
 }
 
+enum class CameraCaptureFormat(val label: String) {
+    RAW_AND_JPEG("RAW + JPEG"),
+    JPEG_ONLY("JPEG only"),
+    RAW_ONLY("RAW only")
+}
+
 enum class CameraConnectionState {
     DISCONNECTED,
     CONNECTING,

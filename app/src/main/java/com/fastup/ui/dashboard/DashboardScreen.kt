@@ -56,9 +56,9 @@ fun DashboardScreen(viewModel: MainViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .background(PureBlack)
-            .padding(16.dp)
+            .padding(12.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         // App Header
         Row(
@@ -69,7 +69,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
             Text(
                 text = "FastUp Dashboard",
                 color = Slate100,
-                fontSize = 24.sp,
+                fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
             )
             // Camera Status Badge
@@ -80,21 +80,21 @@ fun DashboardScreen(viewModel: MainViewModel) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(76.dp),
+                .height(64.dp),
             colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(12.dp),
             border = BorderStroke(1.dp, DarkBorder)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(34.dp)
                         .background(
                             when (cameraState) {
                                 CameraConnectionState.CONNECTED -> Emerald500.copy(alpha = 0.2f)
@@ -115,7 +115,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
                             CameraConnectionState.CONNECTING -> Blue500
                             else -> Slate400
                         },
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(17.dp)
                     )
                 }
 
@@ -130,7 +130,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
                         },
                         color = Slate100,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
+                        fontSize = 13.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -139,14 +139,14 @@ fun DashboardScreen(viewModel: MainViewModel) {
                             "Physical shutter enabled (PC Remote mode)"
                         else "Ensure camera USB mode is set to 'PC Remote'",
                         color = Slate400,
-                        fontSize = 11.sp,
+                        fontSize = 10.5.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
 
                 Box(
-                    modifier = Modifier.width(96.dp),
+                    modifier = Modifier.width(88.dp),
                     contentAlignment = Alignment.CenterEnd
                 ) {
                     if (cameraState != CameraConnectionState.CONNECTED) {
@@ -156,33 +156,33 @@ fun DashboardScreen(viewModel: MainViewModel) {
                                 containerColor = Slate700,
                                 contentColor = Slate100
                             ),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier.height(32.dp)
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = "Scan",
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(13.dp)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Connect", fontSize = 11.sp)
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text("Connect", fontSize = 10.5.sp)
                         }
                     } else {
                         Surface(
                             color = Emerald500.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(6.dp)
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(6.dp)
+                                        .size(5.dp)
                                         .background(Emerald500, CircleShape)
                                 )
-                                Text("Ready", color = Emerald500, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("Ready", color = Emerald500, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -190,126 +190,133 @@ fun DashboardScreen(viewModel: MainViewModel) {
             }
         }
 
-        // Local Transfer Card (Identical design to Upload Pipeline, Fixed height to prevent resize)
-        TransferPipelineCard(
-            title = "Local Transfer",
-            icon = Icons.Default.Download,
-            speedFormatted = deviceStats.speedFormatted,
-            isActive = deviceStats.speedBps > 0L,
-            progress = deviceStats.overallProgress,
-            counter1 = Pair("Captured", deviceStats.totalCaptured.toString()),
-            counter2 = Pair("Pending", deviceStats.pendingTransfer.toString()),
-            counter3 = Pair("Transferred", deviceStats.completedTransfer.toString()),
-            counter4 = Pair("Failed", deviceStats.failedTransfer.toString()),
-            fact1 = Pair("Storage Used", storageFacts.localUsedFormatted),
-            fact2 = Pair("Storage Free", storageFacts.localFreeFormatted),
-            footerContent = {
-                Row(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Folder,
-                        contentDescription = null,
-                        tint = Slate500,
-                        modifier = Modifier.size(13.dp)
-                    )
-                    Text(
-                        text = deviceStats.currentFileName?.let { "Transferring: $it" } ?: "Destination: /tether_captures",
-                        color = Slate400,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-        )
-
-        // Upload Pipeline Card (Identical design to Local Transfer, Fixed height to prevent resize)
-        TransferPipelineCard(
-            title = "Upload Pipeline",
-            icon = Icons.Default.CloudUpload,
-            badge = if (isUploadPaused) "PAUSED" else null,
-            speedFormatted = stats.speedFormatted,
-            isActive = isUploading,
-            progress = stats.overallProgress,
-            counter1 = Pair("Total", stats.totalPhotos.toString()),
-            counter2 = Pair("Pending", stats.pendingCount.toString()),
-            counter3 = Pair("Uploaded", stats.completedCount.toString()),
-            counter4 = Pair("Failed", stats.failedCount.toString()),
-            fact1 = Pair("Uploaded", storageFacts.uploadedSizeFormatted),
-            fact2 = Pair("Server Free", storageFacts.serverAvailableFormatted),
-            footerContent = {
-                if (stats.failedCount > 0) {
-                    Surface(
-                        onClick = { viewModel.retryFailed() },
-                        color = Rose500.copy(alpha = 0.15f),
-                        shape = RoundedCornerShape(6.dp),
-                        border = BorderStroke(1.dp, Rose500.copy(alpha = 0.4f)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(26.dp)
-                    ) {
+        // Side-by-Side: Local Transfer & Upload Pipeline Cards
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(modifier = Modifier.weight(1f)) {
+                TransferPipelineCard(
+                    title = "Local Transfer",
+                    icon = Icons.Default.Download,
+                    speedFormatted = deviceStats.speedFormatted,
+                    isActive = deviceStats.speedBps > 0L,
+                    progress = deviceStats.overallProgress,
+                    counter1 = Pair("Cap", deviceStats.totalCaptured.toString()),
+                    counter2 = Pair("Pnd", deviceStats.pendingTransfer.toString()),
+                    counter3 = Pair("Done", deviceStats.completedTransfer.toString()),
+                    counter4 = Pair("Fail", deviceStats.failedTransfer.toString()),
+                    fact1 = Pair("Used", storageFacts.localUsedFormatted),
+                    fact2 = Pair("Free", storageFacts.localFreeFormatted),
+                    footerContent = {
                         Row(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 8.dp),
+                            modifier = Modifier.fillMaxSize(),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, tint = Rose500, modifier = Modifier.size(12.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Retry ${stats.failedCount} Failed Uploads", color = Rose500, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            Icon(
+                                imageVector = Icons.Default.Folder,
+                                contentDescription = null,
+                                tint = Slate500,
+                                modifier = Modifier.size(10.dp)
+                            )
+                            Text(
+                                text = deviceStats.currentFileName?.let { "Transferring..." } ?: "tether_captures",
+                                color = Slate400,
+                                fontSize = 8.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
-                } else if (isUploadPaused) {
-                    Surface(
-                        onClick = { viewModel.startUpload() },
-                        color = Emerald500.copy(alpha = 0.15f),
-                        shape = RoundedCornerShape(6.dp),
-                        border = BorderStroke(1.dp, Emerald500.copy(alpha = 0.4f)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(26.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Emerald500, modifier = Modifier.size(12.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Resume Upload Pipeline", color = Emerald500, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                )
+            }
+            Box(modifier = Modifier.weight(1f)) {
+                TransferPipelineCard(
+                    title = "Upload Pipeline",
+                    icon = Icons.Default.CloudUpload,
+                    badge = if (isUploadPaused) "PAUSED" else null,
+                    speedFormatted = stats.speedFormatted,
+                    isActive = isUploading,
+                    progress = stats.overallProgress,
+                    counter1 = Pair("Tot", stats.totalPhotos.toString()),
+                    counter2 = Pair("Pnd", stats.pendingCount.toString()),
+                    counter3 = Pair("Up", stats.completedCount.toString()),
+                    counter4 = Pair("Fail", stats.failedCount.toString()),
+                    fact1 = Pair("Up", storageFacts.uploadedSizeFormatted),
+                    fact2 = Pair("Free", storageFacts.serverAvailableFormatted),
+                    footerContent = {
+                        if (stats.failedCount > 0) {
+                            Surface(
+                                onClick = { viewModel.retryFailed() },
+                                color = Rose500.copy(alpha = 0.2f),
+                                shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(0.5.dp, Rose500.copy(alpha = 0.5f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(17.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, tint = Rose500, modifier = Modifier.size(9.dp))
+                                    Spacer(Modifier.width(2.dp))
+                                    Text("Retry ${stats.failedCount}", color = Rose500, fontSize = 8.5.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        } else if (isUploadPaused) {
+                            Surface(
+                                onClick = { viewModel.startUpload() },
+                                color = Emerald500.copy(alpha = 0.2f),
+                                shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(0.5.dp, Emerald500.copy(alpha = 0.5f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(17.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Emerald500, modifier = Modifier.size(9.dp))
+                                    Spacer(Modifier.width(2.dp))
+                                    Text("Resume", color = Emerald500, fontSize = 8.5.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isUploading) Icons.Default.CloudSync else Icons.Default.CloudDone,
+                                    contentDescription = null,
+                                    tint = if (isUploading) Blue400 else Emerald500,
+                                    modifier = Modifier.size(10.dp)
+                                )
+                                Text(
+                                    text = if (isUploading) "Uploading..." else "Synced",
+                                    color = Slate400,
+                                    fontSize = 8.5.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isUploading) Icons.Default.CloudSync else Icons.Default.CloudDone,
-                            contentDescription = null,
-                            tint = if (isUploading) Blue400 else Emerald500,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Text(
-                            text = if (isUploading) "Uploading to server staging..." else "All photos synced to server",
-                            color = Slate400,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
+                )
             }
-        )
+        }
 
         // Target Server Folder Card
         Card(
@@ -513,7 +520,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
 
 /**
  * Shared, identical unified card design for Local Transfer & Upload Pipeline.
- * Fixed height (185.dp) ensures no resizing occurs when state changes.
+ * Fixed height (114.dp) ensures no resizing occurs when state changes.
  */
 @Composable
 fun TransferPipelineCard(
@@ -534,16 +541,16 @@ fun TransferPipelineCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(185.dp),
+            .height(114.dp),
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(10.dp),
         border = BorderStroke(1.dp, DarkBorder)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 8.dp, vertical = 7.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             // Header Row: Title & Speed
             Row(
@@ -553,55 +560,47 @@ fun TransferPipelineCard(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.weight(1f, fill = false)
                 ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
                         tint = Blue400,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(12.dp)
                     )
                     Text(
                         text = title,
                         color = Slate100,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 15.sp
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (badge != null) {
                         Surface(
                             color = Amber500.copy(alpha = 0.2f),
-                            shape = RoundedCornerShape(6.dp)
+                            shape = RoundedCornerShape(3.dp)
                         ) {
                             Text(
                                 text = badge,
                                 color = Amber500,
-                                fontSize = 10.sp,
+                                fontSize = 8.sp,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
                             )
                         }
                     }
                 }
 
                 // Speed Readout
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Speed,
-                        contentDescription = "Speed",
-                        tint = if (isActive) Emerald500 else Slate400,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Text(
-                        text = speedFormatted,
-                        color = if (isActive) Emerald500 else Slate400,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
-                    )
-                }
+                Text(
+                    text = speedFormatted,
+                    color = if (isActive) Emerald500 else Slate400,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 10.sp
+                )
             }
 
             // Progress Bar
@@ -609,8 +608,8 @@ fun TransferPipelineCard(
                 progress = { progress },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp)),
+                    .height(2.5.dp)
+                    .clip(RoundedCornerShape(1.dp)),
                 color = Blue500,
                 trackColor = Slate700
             )
@@ -618,13 +617,13 @@ fun TransferPipelineCard(
             // 1 Row, 2 Columns: Col 1 for Counters, Col 2 for Facts & Data
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Col 1: Counters (Compact 2x2 Layout)
                 Column(
-                    modifier = Modifier.weight(1.1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    modifier = Modifier.weight(0.95f),
+                    verticalArrangement = Arrangement.spacedBy(1.5.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -646,25 +645,27 @@ fun TransferPipelineCard(
                 Box(
                     modifier = Modifier
                         .width(1.dp)
-                        .height(44.dp)
+                        .height(22.dp)
                         .background(DarkBorder)
                 )
 
                 // Col 2: Facts & Data
                 Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    modifier = Modifier.weight(1.05f),
+                    verticalArrangement = Arrangement.spacedBy(1.5.dp)
                 ) {
                     FactDataRow(label = fact1.first, value = fact1.second)
                     FactDataRow(label = fact2.first, value = fact2.second)
                 }
             }
 
-            // Fixed Height Footer Slot (26.dp) ensures Card never resizes
+            Spacer(modifier = Modifier.weight(1f))
+
+            // Fixed Height Footer Slot (18.dp) ensures Card never resizes
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(26.dp),
+                    .height(18.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
                 footerContent()
@@ -677,20 +678,20 @@ fun TransferPipelineCard(
 fun CompactStat(label: String, value: String, color: Color) {
     Row(
         verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(1.5.dp)
     ) {
         Text(
             text = value,
             color = color,
             fontWeight = FontWeight.Bold,
-            fontSize = 15.sp,
+            fontSize = 11.5.sp,
             fontFamily = FontFamily.Monospace
         )
         Text(
             text = label,
             color = Slate400,
-            fontSize = 11.sp,
-            modifier = Modifier.padding(bottom = 1.dp)
+            fontSize = 8.5.sp,
+            modifier = Modifier.padding(bottom = 0.5.dp)
         )
     }
 }
@@ -705,14 +706,16 @@ fun FactDataRow(label: String, value: String) {
         Text(
             text = label,
             color = Slate400,
-            fontSize = 11.sp
+            fontSize = 8.5.sp
         )
         Text(
             text = value,
             color = Slate100,
             fontWeight = FontWeight.SemiBold,
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace
+            fontSize = 9.5.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -729,17 +732,17 @@ fun CameraBadge(cameraState: CameraConnectionState, model: String) {
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
         modifier = Modifier
-            .background(DarkSurface, RoundedCornerShape(12.dp))
-            .border(1.dp, DarkBorder, RoundedCornerShape(12.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .background(DarkSurface, RoundedCornerShape(10.dp))
+            .border(1.dp, DarkBorder, RoundedCornerShape(10.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(8.dp)
+                .size(7.dp)
                 .background(dotColor, CircleShape)
         )
-        Text(text = label, color = Slate100, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text(text = label, color = Slate100, fontSize = 11.sp, fontWeight = FontWeight.Medium)
     }
 }

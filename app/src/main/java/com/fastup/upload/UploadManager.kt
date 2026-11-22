@@ -36,6 +36,7 @@ class UploadManager(private val context: Context) {
     private var workerJob: Job? = null
 
     private val prefs = context.getSharedPreferences("fastup_settings", Context.MODE_PRIVATE)
+    private val uploadedPrefs = context.getSharedPreferences("fastup_uploaded_photos", Context.MODE_PRIVATE)
 
     // Preferences & Settings State
     var serverUrl: String = prefs.getString(PREF_SERVER_URL, "http://10.0.0.43:8000") ?: "http://10.0.0.43:8000"
@@ -66,6 +67,20 @@ class UploadManager(private val context: Context) {
         set(value) {
             _currentSessionId.value = value
             prefs.edit().putString(PREF_CURRENT_FOLDER, value).apply()
+            syncUploadedFilesWithServer()
+        }
+
+    var cameraCaptureFormat: com.fastup.model.CameraCaptureFormat = try {
+        com.fastup.model.CameraCaptureFormat.valueOf(
+            prefs.getString(PREF_CAMERA_CAPTURE_FORMAT, com.fastup.model.CameraCaptureFormat.RAW_AND_JPEG.name)
+                ?: com.fastup.model.CameraCaptureFormat.RAW_AND_JPEG.name
+        )
+    } catch (_: Exception) {
+        com.fastup.model.CameraCaptureFormat.RAW_AND_JPEG
+    }
+        set(value) {
+            field = value
+            prefs.edit().putString(PREF_CAMERA_CAPTURE_FORMAT, value.name).apply()
         }
 
     var uploadFormat: UploadFormat = try {
@@ -115,7 +130,42 @@ class UploadManager(private val context: Context) {
     init {
         scanExistingCaptures()
         refreshLocalFolders()
+        syncUploadedFilesWithServer()
         startWorker()
+    }
+
+    fun syncUploadedFilesWithServer() {
+        scope.launch {
+            try {
+                val serverFiles = apiClient.fetchSessionUploadedFiles(currentSessionId)
+                if (serverFiles.isNotEmpty()) {
+                    val editor = uploadedPrefs.edit()
+                    serverFiles.forEach { fileName ->
+                        editor.putBoolean(fileName, true)
+                        val base = fileName.substringBeforeLast(".")
+                        editor.putBoolean(base, true)
+                    }
+                    editor.apply()
+
+                    _photos.update { list ->
+                        list.map { photo ->
+                            val isCompleted = uploadedPrefs.getBoolean(photo.id, false) ||
+                                (photo.rawFile != null && uploadedPrefs.getBoolean(photo.rawFile.name, false)) ||
+                                (photo.jpegFile != null && uploadedPrefs.getBoolean(photo.jpegFile.name, false)) ||
+                                uploadedPrefs.getBoolean(photo.fileName, false)
+                            if (isCompleted && photo.status != UploadStatus.COMPLETED) {
+                                photo.copy(status = UploadStatus.COMPLETED, uploadProgress = 1f, errorMessage = null)
+                            } else {
+                                photo
+                            }
+                        }
+                    }
+                    Log.i(TAG, "Synced ${serverFiles.size} uploaded files from server for session $currentSessionId")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed syncing uploaded files with server: ${e.message}")
+            }
+        }
     }
 
     fun scanExistingCaptures() {
@@ -150,6 +200,9 @@ class UploadManager(private val context: Context) {
 
                 val totalSize = (raw?.length() ?: 0L) + (jpeg?.length() ?: 0L).let { if (raw == null) primaryFile.length() else it }
 
+                val isUploaded = uploadedPrefs.getBoolean(base, false) ||
+                        groupFiles.any { uploadedPrefs.getBoolean(it.name, false) }
+
                 PhotoItem(
                     id = base,
                     fileName = primaryFile.name,
@@ -159,8 +212,9 @@ class UploadManager(private val context: Context) {
                     previewFile = previewFile,
                     fileSize = totalSize,
                     timestamp = primaryFile.lastModified(),
-                    status = UploadStatus.FAILED,
-                    errorMessage = "Pending retry"
+                    status = if (isUploaded) UploadStatus.COMPLETED else UploadStatus.PENDING,
+                    uploadProgress = if (isUploaded) 1f else 0f,
+                    errorMessage = null
                 )
             }
             if (newItems.isNotEmpty()) {
@@ -209,8 +263,14 @@ class UploadManager(private val context: Context) {
         }
     }
 
-    fun enqueue(photoId: String) {
+    fun enqueue(photoId: String, force: Boolean = false) {
         val photo = _photos.value.find { it.id == photoId } ?: return
+
+        // If already completed and not forced, don't re-upload
+        if (photo.status == UploadStatus.COMPLETED && !force) {
+            Log.d(TAG, "Photo ${photo.fileName} is already completed. Skipping enqueue.")
+            return
+        }
 
         // Verify format eligibility
         val shouldUpload = when (uploadFormat) {
@@ -246,7 +306,7 @@ class UploadManager(private val context: Context) {
         val failed = _photos.value.filter { it.status == UploadStatus.FAILED }
         Log.i(TAG, "Retrying ${failed.size} failed uploads...")
         for (item in failed) {
-            enqueue(item.id)
+            enqueue(item.id, force = true)
         }
     }
 
@@ -255,7 +315,7 @@ class UploadManager(private val context: Context) {
             _isUploadPaused.value = false
             prefs.edit().putBoolean(PREF_UPLOAD_PAUSED, false).apply()
         }
-        enqueue(id)
+        enqueue(id, force = true)
     }
 
     private fun canUploadNow(): Boolean {
@@ -434,6 +494,14 @@ class UploadManager(private val context: Context) {
             }
         } else {
             Log.i(TAG, "Successfully uploaded ${currentPhoto.fileName} (${filesToUpload.size} file(s))")
+            val editor = uploadedPrefs.edit()
+            editor.putBoolean(photoId, true)
+            filesToUpload.forEach { f ->
+                editor.putBoolean(f.name, true)
+                editor.putBoolean(f.nameWithoutExtension, true)
+            }
+            editor.apply()
+
             _photos.update { list ->
                 list.map {
                     if (it.id == photoId) it.copy(
@@ -642,6 +710,7 @@ class UploadManager(private val context: Context) {
         private const val PREF_API_KEY = "pref_api_key"
         private const val PREF_CURRENT_FOLDER = "pref_current_folder"
         private const val PREF_UPLOAD_FORMAT = "pref_upload_format"
+        private const val PREF_CAMERA_CAPTURE_FORMAT = "pref_camera_capture_format"
         private const val PREF_AUTO_UPLOAD = "pref_auto_upload"
         private const val PREF_WIFI_ONLY = "pref_wifi_only"
         private const val PREF_UPLOAD_PAUSED = "pref_upload_paused"
