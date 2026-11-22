@@ -202,10 +202,10 @@ fun DashboardScreen(viewModel: MainViewModel) {
                     speedFormatted = deviceStats.speedFormatted,
                     isActive = deviceStats.speedBps > 0L,
                     progress = deviceStats.overallProgress,
-                    counter1 = Pair("Cap", deviceStats.totalCaptured.toString()),
-                    counter2 = Pair("Pnd", deviceStats.pendingTransfer.toString()),
+                    counter1 = Pair("Captured", deviceStats.totalCaptured.toString()),
+                    counter2 = Pair("Pending", deviceStats.pendingTransfer.toString()),
                     counter3 = Pair("Done", deviceStats.completedTransfer.toString()),
-                    counter4 = Pair("Fail", deviceStats.failedTransfer.toString()),
+                    counter4 = Pair("Failed", deviceStats.failedTransfer.toString()),
                     fact1 = Pair("Used", storageFacts.localUsedFormatted),
                     fact2 = Pair("Free", storageFacts.localFreeFormatted),
                     footerContent = {
@@ -240,10 +240,10 @@ fun DashboardScreen(viewModel: MainViewModel) {
                     speedFormatted = stats.speedFormatted,
                     isActive = isUploading,
                     progress = stats.overallProgress,
-                    counter1 = Pair("Tot", stats.totalPhotos.toString()),
-                    counter2 = Pair("Pnd", stats.pendingCount.toString()),
-                    counter3 = Pair("Up", stats.completedCount.toString()),
-                    counter4 = Pair("Fail", stats.failedCount.toString()),
+                    counter1 = Pair("Total", stats.totalPhotos.toString()),
+                    counter2 = Pair("Pending", stats.pendingCount.toString()),
+                    counter3 = Pair("Uploaded", stats.completedCount.toString()),
+                    counter4 = Pair("Failed", stats.failedCount.toString()),
                     fact1 = Pair("Up", storageFacts.uploadedSizeFormatted),
                     fact2 = Pair("Free", storageFacts.serverAvailableFormatted),
                     footerContent = {
@@ -520,7 +520,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
 
 /**
  * Shared, identical unified card design for Local Transfer & Upload Pipeline.
- * Fixed height (114.dp) ensures no resizing occurs when state changes.
+ * Fixed height (140.dp) ensures no resizing occurs when state changes.
  */
 @Composable
 fun TransferPipelineCard(
@@ -541,7 +541,7 @@ fun TransferPipelineCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(114.dp),
+            .height(156.dp),
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
         shape = RoundedCornerShape(10.dp),
         border = BorderStroke(1.dp, DarkBorder)
@@ -614,45 +614,35 @@ fun TransferPipelineCard(
                 trackColor = Slate700
             )
 
-            // 1 Row, 2 Columns: Col 1 for Counters, Col 2 for Facts & Data
+            // 1 Row, 2 Columns: Col 1 for ALL Counters in ONE column, Col 2 for Facts & Data
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Col 1: Counters (Compact 2x2 Layout)
+                // Col 1: Counters (All 4 in ONE single vertical column)
                 Column(
-                    modifier = Modifier.weight(0.95f),
-                    verticalArrangement = Arrangement.spacedBy(1.5.dp)
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        CompactStat(label = counter1.first, value = counter1.second, color = Slate300)
-                        CompactStat(label = counter2.first, value = counter2.second, color = Amber500)
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        CompactStat(label = counter3.first, value = counter3.second, color = Emerald500)
-                        CompactStat(label = counter4.first, value = counter4.second, color = Rose500)
-                    }
+                    CounterRow(label = counter1.first, value = counter1.second, color = Slate300)
+                    CounterRow(label = counter2.first, value = counter2.second, color = Amber500)
+                    CounterRow(label = counter3.first, value = counter3.second, color = Emerald500)
+                    CounterRow(label = counter4.first, value = counter4.second, color = Rose500)
                 }
 
                 // Subtle Vertical Divider
                 Box(
                     modifier = Modifier
                         .width(1.dp)
-                        .height(22.dp)
+                        .height(54.dp)
                         .background(DarkBorder)
                 )
 
-                // Col 2: Facts & Data
+                // Col 2: Facts & Data (Used and Free in the other column)
                 Column(
                     modifier = Modifier.weight(1.05f),
-                    verticalArrangement = Arrangement.spacedBy(1.5.dp)
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     FactDataRow(label = fact1.first, value = fact1.second)
                     FactDataRow(label = fact2.first, value = fact2.second)
@@ -661,11 +651,11 @@ fun TransferPipelineCard(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // Fixed Height Footer Slot (18.dp) ensures Card never resizes
+            // Fixed Height Footer Slot (17.dp) ensures Card never resizes
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(18.dp),
+                    .height(17.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
                 footerContent()
@@ -675,23 +665,27 @@ fun TransferPipelineCard(
 }
 
 @Composable
-fun CompactStat(label: String, value: String, color: Color) {
+fun CounterRow(label: String, value: String, color: Color) {
     Row(
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(1.5.dp)
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        Text(
+            text = label,
+            color = Slate400,
+            fontSize = 9.sp,
+            lineHeight = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
         Text(
             text = value,
             color = color,
             fontWeight = FontWeight.Bold,
-            fontSize = 11.5.sp,
+            fontSize = 9.5.sp,
+            lineHeight = 12.sp,
             fontFamily = FontFamily.Monospace
-        )
-        Text(
-            text = label,
-            color = Slate400,
-            fontSize = 8.5.sp,
-            modifier = Modifier.padding(bottom = 0.5.dp)
         )
     }
 }
@@ -706,19 +700,24 @@ fun FactDataRow(label: String, value: String) {
         Text(
             text = label,
             color = Slate400,
-            fontSize = 8.5.sp
+            fontSize = 9.sp,
+            lineHeight = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         Text(
             text = value,
             color = Slate100,
             fontWeight = FontWeight.SemiBold,
-            fontSize = 9.5.sp,
+            fontSize = 9.sp,
+            lineHeight = 12.sp,
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
     }
 }
+
 
 @Composable
 fun CameraBadge(cameraState: CameraConnectionState, model: String) {

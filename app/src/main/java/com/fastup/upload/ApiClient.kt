@@ -391,14 +391,14 @@ class ApiClient(
                     if (!avail.isNullOrBlank()) {
                         Result.success(avail)
                     } else {
-                        Result.success("Available")
+                        Result.success("Online")
                     }
                 } else {
-                    Result.success("Available")
+                    Result.success("Online")
                 }
             }
         } catch (_: Exception) {
-            Result.success("Available")
+            Result.success("Online")
         }
     }
 

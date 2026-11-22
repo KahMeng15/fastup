@@ -30,7 +30,7 @@ data class StorageFacts(
     val localUsedFormatted: String = "0 MB",
     val localFreeFormatted: String = "0 GB",
     val uploadedSizeFormatted: String = "0 MB",
-    val serverAvailableFormatted: String = "Available"
+    val serverAvailableFormatted: String = "Online"
 )
 
 class MainViewModel : ViewModel() {
