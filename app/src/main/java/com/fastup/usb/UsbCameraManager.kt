@@ -296,128 +296,93 @@ class UsbCameraManager(
         }
     }
 
-    private suspend fun handleNewObject(initialHandle: Int) {
+    private suspend fun handleNewObject(handle: Int) {
         transferMutex.withLock {
             val d = driver ?: return@withLock
             _connectionState.value = CameraConnectionState.CAPTURING
 
-            var currentHandle = initialHandle
-            var downloadedInBatch = 0
-            var firstWasJpeg = false
-            var firstWasRaw = false
-
             try {
-                while (downloadedInBatch < 2) {
-                    // Short stabilization delay before requesting next object from camera buffer
-                    delay(150)
+                // Short stabilization delay before requesting object info
+                delay(150)
 
-                    // For the 2nd file in a batch, verify with camera that an object is actually in memory
-                    // to prevent calling getObjectInfo on an empty RAM buffer (which crashes Sony firmware)
-                    if (downloadedInBatch == 1) {
-                        val hasSecond = d.hasObjectInMemory()
-                        Log.i(TAG, "Checking for 2nd file in RAM (RAW+JPEG check): hasObjectInMemory=$hasSecond")
-                        if (!hasSecond) {
-                            Log.i(TAG, "No 2nd file in camera RAM. Shutter batch complete.")
-                            break
+                val info = d.getObjectInfo(handle)
+                if (info == null) {
+                    Log.w(TAG, "No object ready at handle 0x${handle.toString(16)}")
+                    return@withLock
+                }
+
+                val fileName = info.first.takeIf { it.isNotBlank() } ?: "DSC_${System.currentTimeMillis()}.JPG"
+                val expectedSize = info.second
+
+                _deviceTransferStats.update {
+                    it.copy(
+                        totalCaptured = it.totalCaptured + 1,
+                        pendingTransfer = it.pendingTransfer + 1,
+                        currentFileName = fileName
+                    )
+                }
+                Log.i(TAG, "Initiating download for handle 0x${handle.toString(16)} -> $fileName (size: $expectedSize bytes)")
+
+                val sessionFolder = com.fastup.FastUpApp.instance.uploadManager.currentSessionId.trim().ifEmpty { "weddings" }
+                val storageDir = File(context.getExternalFilesDir(null), "tether_captures/$sessionFolder").apply { mkdirs() }
+                val targetFile = File(storageDir, fileName)
+
+                var lastSpeedUpdate = System.currentTimeMillis()
+                var lastBytesTransferred = 0L
+
+                val success = d.downloadObject(handle, targetFile, expectedSize) { bytesRead, totalBytes ->
+                    val now = System.currentTimeMillis()
+                    val dt = now - lastSpeedUpdate
+                    if (dt >= 200) {
+                        val speed = if (dt > 0) ((bytesRead - lastBytesTransferred) * 1000L) / dt else 0L
+                        lastSpeedUpdate = now
+                        lastBytesTransferred = bytesRead
+                        val prog = if (totalBytes > 0) bytesRead.toFloat() / totalBytes else 0f
+                        _deviceTransferStats.update {
+                            it.copy(
+                                speedBps = speed,
+                                speedFormatted = formatSpeed(speed),
+                                overallProgress = if (it.totalCaptured > 0) (it.completedTransfer.toFloat() + prog) / it.totalCaptured else prog
+                            )
                         }
                     }
+                }
 
-                    val info = d.getObjectInfo(currentHandle)
-                    if (info == null) {
-                        Log.d(TAG, "No object ready at handle 0x${currentHandle.toString(16)}")
-                        break
-                    }
-
-                    val fileName = info.first.takeIf { it.isNotBlank() } ?: "DSC_${System.currentTimeMillis()}.JPG"
-                    val expectedSize = info.second
-                    val isJpeg = fileName.endsWith(".jpg", ignoreCase = true) || fileName.endsWith(".jpeg", ignoreCase = true)
-                    val isRaw = fileName.endsWith(".arw", ignoreCase = true)
-
-                    if (downloadedInBatch == 0) {
-                        firstWasJpeg = isJpeg
-                        firstWasRaw = isRaw
-                    }
-
+                if (success && targetFile.exists() && targetFile.length() > 0) {
+                    Log.i(TAG, "Photo downloaded successfully: ${targetFile.absolutePath} (${targetFile.length()} bytes)")
                     _deviceTransferStats.update {
+                        val newCompleted = it.completedTransfer + 1
+                        val total = it.totalCaptured
+                        val prog = if (total > 0) newCompleted.toFloat() / total else 1f
                         it.copy(
-                            totalCaptured = it.totalCaptured + 1,
-                            pendingTransfer = it.pendingTransfer + 1,
-                            currentFileName = fileName
+                            pendingTransfer = maxOf(0, it.pendingTransfer - 1),
+                            completedTransfer = newCompleted,
+                            currentFileName = null,
+                            speedBps = 0L,
+                            speedFormatted = "0 kB/s",
+                            overallProgress = prog
                         )
                     }
-                    Log.i(TAG, "Initiating download [batch item ${downloadedInBatch + 1}] handle 0x${currentHandle.toString(16)} -> $fileName (size: $expectedSize bytes)")
-
-                    val sessionFolder = com.fastup.FastUpApp.instance.uploadManager.currentSessionId.trim().ifEmpty { "weddings" }
-                    val storageDir = File(context.getExternalFilesDir(null), "tether_captures/$sessionFolder").apply { mkdirs() }
-                    val targetFile = File(storageDir, fileName)
-
-                    var lastSpeedUpdate = System.currentTimeMillis()
-                    var lastBytesTransferred = 0L
-
-                    val success = d.downloadObject(currentHandle, targetFile, expectedSize) { bytesRead, totalBytes ->
-                        val now = System.currentTimeMillis()
-                        val dt = now - lastSpeedUpdate
-                        if (dt >= 200) {
-                            val speed = if (dt > 0) ((bytesRead - lastBytesTransferred) * 1000L) / dt else 0L
-                            lastSpeedUpdate = now
-                            lastBytesTransferred = bytesRead
-                            val prog = if (totalBytes > 0) bytesRead.toFloat() / totalBytes else 0f
-                            _deviceTransferStats.update {
-                                it.copy(
-                                    speedBps = speed,
-                                    speedFormatted = formatSpeed(speed),
-                                    overallProgress = if (it.totalCaptured > 0) (it.completedTransfer.toFloat() + prog) / it.totalCaptured else prog
-                                )
-                            }
-                        }
+                    withContext(Dispatchers.Main) {
+                        onPhotoCaptured(targetFile)
                     }
-                    if (success && targetFile.exists() && targetFile.length() > 0) {
-                        downloadedInBatch++
-                        Log.i(TAG, "Photo downloaded successfully ($downloadedInBatch in batch): ${targetFile.absolutePath} (${targetFile.length()} bytes)")
-                        _deviceTransferStats.update {
-                            val newCompleted = it.completedTransfer + 1
-                            val total = it.totalCaptured
-                            val prog = if (total > 0) newCompleted.toFloat() / total else 1f
-                            it.copy(
-                                pendingTransfer = maxOf(0, it.pendingTransfer - 1),
-                                completedTransfer = newCompleted,
-                                currentFileName = null,
-                                speedBps = 0L,
-                                speedFormatted = "0 kB/s",
-                                overallProgress = prog
-                            )
-                        }
-                        withContext(Dispatchers.Main) {
-                            onPhotoCaptured(targetFile)
-                        }
-                    } else {
-                        Log.w(TAG, "Photo download for handle 0x${currentHandle.toString(16)} returned false or empty file")
-                        _deviceTransferStats.update {
-                            it.copy(
-                                pendingTransfer = maxOf(0, it.pendingTransfer - 1),
-                                failedTransfer = it.failedTransfer + 1,
-                                currentFileName = null,
-                                speedBps = 0L,
-                                speedFormatted = "0 kB/s"
-                            )
-                        }
-                        if (targetFile.exists() && targetFile.length() == 0L) {
-                            targetFile.delete()
-                        }
-                        break
+                } else {
+                    Log.w(TAG, "Photo download for handle 0x${handle.toString(16)} returned false or empty file")
+                    _deviceTransferStats.update {
+                        it.copy(
+                            pendingTransfer = maxOf(0, it.pendingTransfer - 1),
+                            failedTransfer = it.failedTransfer + 1,
+                            currentFileName = null,
+                            speedBps = 0L,
+                            speedFormatted = "0 kB/s"
+                        )
                     }
-
-                    // If we have already downloaded both a RAW and a JPEG for this shot, the batch is 100% complete!
-                    if ((firstWasJpeg && isRaw) || (firstWasRaw && isJpeg) || downloadedInBatch >= 2) {
-                        Log.i(TAG, "Both RAW and JPEG downloaded for this shot. Shutter batch complete.")
-                        break
+                    if (targetFile.exists() && targetFile.length() == 0L) {
+                        targetFile.delete()
                     }
-
-                    // For the 2nd file, target PHOTO_OBJECT_HANDLE
-                    currentHandle = SonyPtpConstants.PHOTO_OBJECT_HANDLE
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error downloading captured objects", e)
+                Log.e(TAG, "Error downloading captured object 0x${handle.toString(16)}", e)
                 _deviceTransferStats.update {
                     it.copy(
                         pendingTransfer = maxOf(0, it.pendingTransfer - 1),

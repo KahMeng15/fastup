@@ -177,68 +177,99 @@ class SonyPtpDriver(
      * Retrieves filename and approximate size from ObjectInfo dataset.
      * Returns null if no object is ready or camera returned a response container directly (e.g. queue empty).
      */
-    fun getObjectInfo(handle: Int): Pair<String, Long>? {
-        val tid = nextTransactionId()
-        val cmd = PtpPacket.createCommand(SonyPtpConstants.PTP_OP_GET_OBJECT_INFO, tid, handle)
-        if (!sendBulk(cmd)) return null
+    fun getObjectInfo(handle: Int, retries: Int = 3): Pair<String, Long>? {
+        for (attempt in 1..retries) {
+            val tid = nextTransactionId()
+            val cmd = PtpPacket.createCommand(SonyPtpConstants.PTP_OP_GET_OBJECT_INFO, tid, handle)
+            if (!sendBulk(cmd)) {
+                if (attempt < retries) {
+                    try { Thread.sleep(150) } catch (ignored: InterruptedException) {}
+                    continue
+                }
+                return null
+            }
 
-        val maxPacket = bulkIn.maxPacketSize.coerceAtLeast(16384)
-        val buffer = ByteArray(maxPacket)
-        val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 1500)
-        if (read < PtpPacket.HEADER_SIZE) return null
+            val maxPacket = bulkIn.maxPacketSize.coerceAtLeast(16384)
+            val buffer = ByteArray(maxPacket)
+            val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 2000)
+            if (read < PtpPacket.HEADER_SIZE) {
+                if (attempt < retries) {
+                    try { Thread.sleep(150) } catch (ignored: InterruptedException) {}
+                    continue
+                }
+                return null
+            }
 
-        val header = PtpPacket.parseHeader(buffer)
-        if (header.type == SonyPtpConstants.PTP_CONTAINER_RESPONSE) {
-            Log.d(TAG, "getObjectInfo(0x${handle.toString(16)}) returned response container directly: code=0x${header.code.toString(16)}")
-            return null
+            val header = PtpPacket.parseHeader(buffer)
+            if (header.type == SonyPtpConstants.PTP_CONTAINER_RESPONSE) {
+                Log.d(TAG, "getObjectInfo(0x${handle.toString(16)}) returned response container directly: code=0x${header.code.toString(16)} (attempt $attempt/$retries)")
+                if (attempt < retries) {
+                    try { Thread.sleep(200) } catch (ignored: InterruptedException) {}
+                    continue
+                }
+                return null
+            }
+
+            if (header.type != SonyPtpConstants.PTP_CONTAINER_DATA) {
+                Log.w(TAG, "getObjectInfo expected DATA container, got type ${header.type}")
+                if (attempt < retries) {
+                    try { Thread.sleep(150) } catch (ignored: InterruptedException) {}
+                    continue
+                }
+                return null
+            }
+
+            val totalDataLen = (header.length - PtpPacket.HEADER_SIZE).toInt()
+            val bos = ByteArrayOutputStream(if (totalDataLen > 0) totalDataLen else 1024)
+
+            val firstChunk = read - PtpPacket.HEADER_SIZE
+            if (firstChunk > 0) {
+                bos.write(buffer, PtpPacket.HEADER_SIZE, firstChunk)
+            }
+
+            while (bos.size() < totalDataLen) {
+                val chunk = connection.bulkTransfer(bulkIn, buffer, buffer.size, 2000)
+                if (chunk <= 0) break
+                bos.write(buffer, 0, chunk)
+            }
+
+            // Consume trailing response container
+            val resp = readTransactionResponse()
+            val data = bos.toByteArray()
+
+            if (data.size < 52) {
+                Log.w(TAG, "getObjectInfo returned insufficient data: size=${data.size}")
+                if (attempt < retries) {
+                    try { Thread.sleep(150) } catch (ignored: InterruptedException) {}
+                    continue
+                }
+                return null
+            }
+
+            try {
+                val bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                bb.position(8) // Skip StorageID(4), ObjectFormat(2), ProtectionStatus(2)
+                val compressedSize = bb.int.toLong() and 0xFFFFFFFFL
+
+                // Skip thumb & image dimensions to reach filename string
+                // thumbFormat(2) + thumbCompressed(4) + thumbWidth(4) + thumbHeight(4)
+                // + imgWidth(4) + imgHeight(4) + imgBitDepth(4) + parentObj(4)
+                // + assocType(2) + assocDesc(4) + seqNum(4) = 40 bytes
+                bb.position(12 + 40)
+
+                val filename = readPtpString(bb) ?: "DSC_${handle}.ARW"
+                Log.i(TAG, "Parsed ObjectInfo for 0x${handle.toString(16)}: $filename ($compressedSize bytes)")
+                return Pair(filename, compressedSize)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error parsing ObjectInfo: ${e.message}")
+                if (attempt < retries) {
+                    try { Thread.sleep(150) } catch (ignored: InterruptedException) {}
+                    continue
+                }
+                return null
+            }
         }
-
-        if (header.type != SonyPtpConstants.PTP_CONTAINER_DATA) {
-            Log.w(TAG, "getObjectInfo expected DATA container, got type ${header.type}")
-            return null
-        }
-
-        val totalDataLen = (header.length - PtpPacket.HEADER_SIZE).toInt()
-        val bos = ByteArrayOutputStream(if (totalDataLen > 0) totalDataLen else 1024)
-
-        val firstChunk = read - PtpPacket.HEADER_SIZE
-        if (firstChunk > 0) {
-            bos.write(buffer, PtpPacket.HEADER_SIZE, firstChunk)
-        }
-
-        while (bos.size() < totalDataLen) {
-            val chunk = connection.bulkTransfer(bulkIn, buffer, buffer.size, 2000)
-            if (chunk <= 0) break
-            bos.write(buffer, 0, chunk)
-        }
-
-        // Consume trailing response container
-        val resp = readTransactionResponse()
-        val data = bos.toByteArray()
-
-        if (data.size < 52) {
-            Log.w(TAG, "getObjectInfo returned insufficient data: size=${data.size}")
-            return null
-        }
-
-        try {
-            val bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-            bb.position(8) // Skip StorageID(4), ObjectFormat(2), ProtectionStatus(2)
-            val compressedSize = bb.int.toLong() and 0xFFFFFFFFL
-
-            // Skip thumb & image dimensions to reach filename string
-            // thumbFormat(2) + thumbCompressed(4) + thumbWidth(4) + thumbHeight(4)
-            // + imgWidth(4) + imgHeight(4) + imgBitDepth(4) + parentObj(4)
-            // + assocType(2) + assocDesc(4) + seqNum(4) = 40 bytes
-            bb.position(12 + 40)
-
-            val filename = readPtpString(bb) ?: "DSC_${handle}.ARW"
-            Log.i(TAG, "Parsed ObjectInfo for 0x${handle.toString(16)}: $filename ($compressedSize bytes)")
-            return Pair(filename, compressedSize)
-        } catch (e: Exception) {
-            Log.w(TAG, "Error parsing ObjectInfo: ${e.message}")
-            return null
-        }
+        return null
     }
 
     /**
@@ -348,14 +379,18 @@ class SonyPtpDriver(
         return String(chars)
     }
 
-    private fun sendBulk(data: ByteArray): Boolean {
-        val sent = connection.bulkTransfer(bulkOut, data, data.size, 5000)
-        if (sent < 0) {
-            Log.w(TAG, "bulkTransfer write failed (sent=$sent)")
-            clearHalt()
-            return false
+    private fun sendBulk(data: ByteArray, retries: Int = 3): Boolean {
+        for (attempt in 1..retries) {
+            val sent = connection.bulkTransfer(bulkOut, data, data.size, 5000)
+            if (sent >= 0) return true
+            Log.w(TAG, "bulkTransfer write failed (sent=$sent, attempt $attempt/$retries)")
+            if (attempt < retries) {
+                try {
+                    Thread.sleep(100)
+                } catch (ignored: InterruptedException) {}
+            }
         }
-        return true
+        return false
     }
 
     private fun receiveData(): ByteArray? {
