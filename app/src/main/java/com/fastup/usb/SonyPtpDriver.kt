@@ -202,11 +202,7 @@ class SonyPtpDriver(
 
             val header = PtpPacket.parseHeader(buffer)
             if (header.type == SonyPtpConstants.PTP_CONTAINER_RESPONSE) {
-                Log.d(TAG, "getObjectInfo(0x${handle.toString(16)}) returned response container directly: code=0x${header.code.toString(16)} (attempt $attempt/$retries)")
-                if (attempt < retries) {
-                    try { Thread.sleep(200) } catch (ignored: InterruptedException) {}
-                    continue
-                }
+                Log.d(TAG, "getObjectInfo(0x${handle.toString(16)}) returned response container directly: code=0x${header.code.toString(16)}")
                 return null
             }
 

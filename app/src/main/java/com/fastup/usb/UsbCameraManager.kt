@@ -269,14 +269,13 @@ class UsbCameraManager(
             while (isActive && _connectionState.value != CameraConnectionState.DISCONNECTED && _connectionState.value != CameraConnectionState.ERROR) {
                 val d = driver ?: break
 
-                // Read incoming PTP event from camera interrupt endpoint (blocking up to 500ms)
-                val event = d.pollEvent(timeoutMs = 500)
+                // Poll incoming PTP event from camera interrupt endpoint (blocking up to 400ms)
+                val event = d.pollEvent(timeoutMs = 400)
                 if (event != null) {
                     val eventCode = event.first
                     val handle = event.second
                     Log.i(TAG, "PTP Event received: 0x${eventCode.toString(16)}, handle=${handle?.let { "0x" + it.toString(16) } ?: "null"}")
 
-                    // Check for Sony object added events (0xC201)
                     val isPhotoEvent = eventCode == SonyPtpConstants.PTP_EVENT_OBJECT_ADDED ||
                             eventCode == SonyPtpConstants.SONY_EVENT_OBJECT_READY ||
                             eventCode == 0xC101 || eventCode == 0xC201
@@ -287,8 +286,11 @@ class UsbCameraManager(
                         } else {
                             SonyPtpConstants.PHOTO_OBJECT_HANDLE
                         }
-                        handleNewObject(targetHandle)
+                        drainPendingObjects(targetHandle)
                     }
+                } else {
+                    // Check if camera has queued objects waiting in buffer (e.g. dropped burst event or pending RAW)
+                    drainPendingObjects()
                 }
 
                 delay(50)
@@ -296,24 +298,30 @@ class UsbCameraManager(
         }
     }
 
-    private suspend fun handleNewObject(handle: Int) {
+    private suspend fun drainPendingObjects(triggerHandle: Int? = null) {
         transferMutex.withLock {
             val d = driver ?: return@withLock
-            _connectionState.value = CameraConnectionState.CAPTURING
+            var currentHandle = triggerHandle ?: SonyPtpConstants.PHOTO_OBJECT_HANDLE
+            var consecutiveMisses = 0
 
-            try {
-                // Short stabilization delay before requesting object info
-                delay(150)
-
-                val info = d.getObjectInfo(handle)
+            while (scope.isActive && consecutiveMisses < 2) {
+                val info = d.getObjectInfo(currentHandle)
                 if (info == null) {
-                    Log.w(TAG, "No object ready at handle 0x${handle.toString(16)}")
-                    return@withLock
+                    consecutiveMisses++
+                    if (consecutiveMisses < 2 && triggerHandle != null) {
+                        // Brief wait in case camera is in the middle of preparing RAW right after JPEG
+                        delay(250)
+                        currentHandle = SonyPtpConstants.PHOTO_OBJECT_HANDLE
+                        continue
+                    }
+                    break
                 }
+                consecutiveMisses = 0
 
                 val fileName = info.first.takeIf { it.isNotBlank() } ?: "DSC_${System.currentTimeMillis()}.JPG"
                 val expectedSize = info.second
 
+                _connectionState.value = CameraConnectionState.CAPTURING
                 _deviceTransferStats.update {
                     it.copy(
                         totalCaptured = it.totalCaptured + 1,
@@ -321,7 +329,7 @@ class UsbCameraManager(
                         currentFileName = fileName
                     )
                 }
-                Log.i(TAG, "Initiating download for handle 0x${handle.toString(16)} -> $fileName (size: $expectedSize bytes)")
+                Log.i(TAG, "Draining buffer object handle 0x${currentHandle.toString(16)} -> $fileName (size: $expectedSize bytes)")
 
                 val sessionFolder = com.fastup.FastUpApp.instance.uploadManager.currentSessionId.trim().ifEmpty { "weddings" }
                 val storageDir = File(context.getExternalFilesDir(null), "tether_captures/$sessionFolder").apply { mkdirs() }
@@ -330,7 +338,7 @@ class UsbCameraManager(
                 var lastSpeedUpdate = System.currentTimeMillis()
                 var lastBytesTransferred = 0L
 
-                val success = d.downloadObject(handle, targetFile, expectedSize) { bytesRead, totalBytes ->
+                val success = d.downloadObject(currentHandle, targetFile, expectedSize) { bytesRead, totalBytes ->
                     val now = System.currentTimeMillis()
                     val dt = now - lastSpeedUpdate
                     if (dt >= 200) {
@@ -367,7 +375,7 @@ class UsbCameraManager(
                         onPhotoCaptured(targetFile)
                     }
                 } else {
-                    Log.w(TAG, "Photo download for handle 0x${handle.toString(16)} returned false or empty file")
+                    Log.w(TAG, "Photo download for handle 0x${currentHandle.toString(16)} returned false or empty file")
                     _deviceTransferStats.update {
                         it.copy(
                             pendingTransfer = maxOf(0, it.pendingTransfer - 1),
@@ -380,22 +388,16 @@ class UsbCameraManager(
                     if (targetFile.exists() && targetFile.length() == 0L) {
                         targetFile.delete()
                     }
+                    break
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error downloading captured object 0x${handle.toString(16)}", e)
-                _deviceTransferStats.update {
-                    it.copy(
-                        pendingTransfer = maxOf(0, it.pendingTransfer - 1),
-                        failedTransfer = it.failedTransfer + 1,
-                        currentFileName = null,
-                        speedBps = 0L,
-                        speedFormatted = "0 kB/s"
-                    )
-                }
-            } finally {
-                com.fastup.FastUpApp.instance.uploadManager.refreshLocalFolders()
-                _connectionState.value = CameraConnectionState.CONNECTED
+
+                // After downloading, next queued file in camera memory is at PHOTO_OBJECT_HANDLE
+                currentHandle = SonyPtpConstants.PHOTO_OBJECT_HANDLE
+                delay(100)
             }
+
+            com.fastup.FastUpApp.instance.uploadManager.refreshLocalFolders()
+            _connectionState.value = CameraConnectionState.CONNECTED
         }
     }
 
