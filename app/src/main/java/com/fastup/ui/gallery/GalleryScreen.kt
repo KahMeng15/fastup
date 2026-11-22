@@ -80,7 +80,7 @@ fun GalleryScreen(
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        text = "Take a photo with the Sony A7 III physical shutter to view it here instantly.",
+                        text = "Take a photo with the camera physical shutter to view it here instantly.",
                         color = Slate600,
                         fontSize = 13.sp,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center

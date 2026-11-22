@@ -30,14 +30,45 @@ class ApiClient(
     var apiKey: String = "fastup_secret_key"
 ) {
 
+    companion object {
+        /**
+         * Resolves the device's actual Wi-Fi / LAN IP address (e.g. 10.0.0.44).
+         */
+        fun getLocalIpAddress(): String? {
+            try {
+                val interfaces = java.net.NetworkInterface.getNetworkInterfaces() ?: return null
+                while (interfaces.hasMoreElements()) {
+                    val iface = interfaces.nextElement()
+                    if (iface.isLoopback || !iface.isUp) continue
+                    val addresses = iface.inetAddresses
+                    while (addresses.hasMoreElements()) {
+                        val addr = addresses.nextElement()
+                        if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
+                            val host = addr.hostAddress ?: ""
+                            if (host.isNotBlank() && !host.startsWith("127.")) {
+                                return host
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+            return null
+        }
+    }
+
     private val client = OkHttpClient.Builder()
         .addInterceptor { chain ->
             val original = chain.request()
             val baseOrigin = cleanUrl("").removeSuffix("/")
             val proto = if (baseOrigin.startsWith("https", ignoreCase = true)) "https" else "http"
+            val localIp = getLocalIpAddress()
             val requestBuilder = original.newBuilder()
                 .header("x-forwarded-proto", proto)
                 .header("Origin", baseOrigin)
+            if (!localIp.isNullOrBlank()) {
+                requestBuilder.header("x-device-ip", localIp)
+                requestBuilder.header("x-client-ip", localIp)
+            }
             chain.proceed(requestBuilder.build())
         }
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -290,6 +321,10 @@ class ApiClient(
             val endpoint = "$base/api/staging/otp/claim"
             val json = JSONObject().apply {
                 put("otp", otpCode.trim())
+                val localIp = getLocalIpAddress()
+                if (!localIp.isNullOrBlank()) {
+                    put("clientIp", localIp)
+                }
             }
             val body = json.toString().toRequestBody("application/json".toMediaTypeOrNull())
 
@@ -334,6 +369,36 @@ class ApiClient(
         } catch (e: Exception) {
             Log.e("ApiClient", "Error claiming OTP code", e)
             Result.failure(e)
+        }
+    }
+
+    /**
+     * Probe server storage availability.
+     */
+    suspend fun fetchServerStorageAvailable(): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url(cleanUrl("api/staging/sessions"))
+                .addHeader("x-api-key", apiKey)
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val bodyStr = response.body?.string() ?: ""
+                    val obj = try { JSONObject(bodyStr) } catch (_: Exception) { null }
+                    val avail = obj?.optString("availableStorage", "")
+                    if (!avail.isNullOrBlank()) {
+                        Result.success(avail)
+                    } else {
+                        Result.success("Available")
+                    }
+                } else {
+                    Result.success("Available")
+                }
+            }
+        } catch (_: Exception) {
+            Result.success("Available")
         }
     }
 }

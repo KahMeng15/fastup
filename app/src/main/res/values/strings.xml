@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">FastUp</string>
     <string name="channel_usb_name">FastUp Camera Tether</string>
-    <string name="channel_usb_desc">Maintains active USB connection with Sony A7 III</string>
+    <string name="channel_usb_desc">Maintains active USB connection with camera</string>
 </resources>

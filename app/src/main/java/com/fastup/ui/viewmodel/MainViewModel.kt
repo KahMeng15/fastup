@@ -26,6 +26,13 @@ data class DashboardStats(
     val speedFormatted: String = "0 kB/s"
 )
 
+data class StorageFacts(
+    val localUsedFormatted: String = "0 MB",
+    val localFreeFormatted: String = "0 GB",
+    val uploadedSizeFormatted: String = "0 MB",
+    val serverAvailableFormatted: String = "Available"
+)
+
 class MainViewModel : ViewModel() {
 
     private val uploadManager = FastUpApp.instance.uploadManager
@@ -39,11 +46,19 @@ class MainViewModel : ViewModel() {
     private val _cameraState = MutableStateFlow(CameraConnectionState.DISCONNECTED)
     val cameraState: StateFlow<CameraConnectionState> = _cameraState.asStateFlow()
 
-    private val _cameraModel = MutableStateFlow("Sony ILCE-7M3")
+    private val _cameraModel = MutableStateFlow("Camera")
     val cameraModel: StateFlow<String> = _cameraModel.asStateFlow()
 
     private val _deviceTransferStats = MutableStateFlow(com.fastup.usb.DeviceTransferStats())
     val deviceTransferStats: StateFlow<com.fastup.usb.DeviceTransferStats> = _deviceTransferStats.asStateFlow()
+
+    private val _serverAvailableStorage = MutableStateFlow("Available")
+    val serverAvailableStorage: StateFlow<String> = _serverAvailableStorage.asStateFlow()
+
+    init {
+        checkServerStorage()
+        uploadManager.refreshLocalFolders()
+    }
 
     // Configuration Settings
     var serverUrl: String
@@ -140,6 +155,46 @@ class MainViewModel : ViewModel() {
             speedFormatted = speedStr
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardStats())
+
+    val storageFacts: StateFlow<StorageFacts> = kotlinx.coroutines.flow.combine(
+        uploadManager.localFolders,
+        uploadManager.photos,
+        _serverAvailableStorage
+    ) { localFolders, photoList, serverAvail ->
+        val localUsed = localFolders.sumOf { it.totalSizeBytes }
+        val freeSpace = try {
+            FastUpApp.instance.getExternalFilesDir(null)?.usableSpace ?: 0L
+        } catch (_: Exception) {
+            0L
+        }
+        val uploadedSize = photoList.filter { it.status == UploadStatus.COMPLETED }.sumOf { it.fileSize }
+
+        StorageFacts(
+            localUsedFormatted = formatStorageBytes(localUsed),
+            localFreeFormatted = formatStorageBytes(freeSpace),
+            uploadedSizeFormatted = formatStorageBytes(uploadedSize),
+            serverAvailableFormatted = serverAvail
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StorageFacts())
+
+    fun checkServerStorage() {
+        viewModelScope.launch {
+            val res = uploadManager.apiClient.fetchServerStorageAvailable()
+            res.onSuccess { avail ->
+                _serverAvailableStorage.value = avail
+            }
+        }
+    }
+
+    private fun formatStorageBytes(bytes: Long): String {
+        return when {
+            bytes >= 1024L * 1024L * 1024L -> String.format(java.util.Locale.US, "%.1f GB", bytes.toDouble() / (1024L * 1024L * 1024L))
+            bytes >= 1024L * 1024L -> String.format(java.util.Locale.US, "%.0f MB", bytes.toDouble() / (1024L * 1024L))
+            bytes >= 1024L -> String.format(java.util.Locale.US, "%.0f kB", bytes.toDouble() / 1024L)
+            bytes > 0L -> "$bytes B"
+            else -> "0 MB"
+        }
+    }
 
     fun attachCameraManager(manager: UsbCameraManager) {
         usbCameraManager = manager

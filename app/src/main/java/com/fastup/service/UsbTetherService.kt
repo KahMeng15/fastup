@@ -48,11 +48,11 @@ class UsbTetherService : Service() {
             ServiceCompat.startForeground(
                 this,
                 NOTIFICATION_ID,
-                buildNotification("Sony A7 III: Ready"),
+                buildNotification("Camera: Ready"),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             )
         } else {
-            startForeground(NOTIFICATION_ID, buildNotification("Sony A7 III: Ready"))
+            startForeground(NOTIFICATION_ID, buildNotification("Camera: Ready"))
         }
 
         // 2. Initialize camera manager and scan for connected camera
@@ -66,8 +66,8 @@ class UsbTetherService : Service() {
     private fun observeCameraState() {
         usbCameraManager.connectionState.onEach { state ->
             val text = when (state) {
-                CameraConnectionState.CONNECTED -> "Sony A7 III Connected (Ready to shoot)"
-                CameraConnectionState.CONNECTING -> "Connecting to Sony A7 III..."
+                CameraConnectionState.CONNECTED -> "Camera Connected (Ready to shoot)"
+                CameraConnectionState.CONNECTING -> "Connecting to camera..."
                 CameraConnectionState.CAPTURING -> "Receiving photo from camera..."
                 CameraConnectionState.DISCONNECTED -> "No camera connected (Waiting for USB)"
                 CameraConnectionState.ERROR -> "USB Connection Error"
