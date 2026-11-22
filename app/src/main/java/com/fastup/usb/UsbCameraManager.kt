@@ -64,6 +64,9 @@ class UsbCameraManager(
     private val _cameraModel = MutableStateFlow("Camera")
     val cameraModel: StateFlow<String> = _cameraModel.asStateFlow()
 
+    private val _cameraBattery = MutableStateFlow<Int?>(null)
+    val cameraBattery: StateFlow<Int?> = _cameraBattery.asStateFlow()
+
     private val _deviceTransferStats = MutableStateFlow(DeviceTransferStats())
     val deviceTransferStats: StateFlow<DeviceTransferStats> = _deviceTransferStats.asStateFlow()
 
@@ -372,6 +375,15 @@ class UsbCameraManager(
                 _cameraModel.value = device.productName ?: "Camera"
                 Log.i(TAG, "Successfully connected to camera! Ready for tethered shooting.")
 
+                // Query initial camera battery in background
+                scope.launch {
+                    val batt = transferMutex.withLock { pDriver.queryBatteryLevel() }
+                    if (batt != null) {
+                        _cameraBattery.value = batt
+                        Log.i(TAG, "Initial camera battery: $batt%")
+                    }
+                }
+
                 startMonitoringLoop()
             } else {
                 Log.e(TAG, "Failed to initialize Sony PTP session")
@@ -399,7 +411,25 @@ class UsbCameraManager(
                 if (event != null) {
                     val eventCode = event.first
                     val handle = event.second
-                    Log.i(TAG, "PTP Event received: 0x${eventCode.toString(16)}, handle=${handle?.let { "0x" + it.toString(16) } ?: "null"}")
+                    val param2 = event.third
+                    Log.i(TAG, "PTP Event received: 0x${eventCode.toString(16)}, handle=${handle?.let { "0x" + it.toString(16) } ?: "null"}, param2=${param2?.let { "0x" + it.toString(16) } ?: "null"}")
+
+                    // Check Sony DevicePropChanged event for battery update (0xC203 or standard 0x4006 with handle 0xD218 or 0xD20E)
+                    if (eventCode == 0xC203 || eventCode == SonyPtpConstants.PTP_EVENT_DEVICE_PROP_CHANGED) {
+                        if (handle == SonyPtpConstants.SONY_DPC_BATTERY_LEVEL || handle == 0xD20E || handle == SonyPtpConstants.PTP_DPC_BATTERY_LEVEL) {
+                            val level = param2?.let { it and 0xFF }
+                            if (level != null && level in 0..100) {
+                                _cameraBattery.value = level
+                                Log.i(TAG, "Camera battery level updated via event: $level%")
+                            } else {
+                                // Refresh battery via 0x9209 query in background
+                                scope.launch {
+                                    val batt = transferMutex.withLock { driver?.queryBatteryLevel() }
+                                    if (batt != null) _cameraBattery.value = batt
+                                }
+                            }
+                        }
+                    }
 
                     val isPhotoEvent = eventCode == SonyPtpConstants.PTP_EVENT_OBJECT_ADDED ||
                             eventCode == SonyPtpConstants.SONY_EVENT_OBJECT_READY ||

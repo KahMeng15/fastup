@@ -51,6 +51,17 @@ data class ExifDetails(
     val cameraModel: String? = "Sony ILCE-7M3"
 )
 
+data class ServerStagingPhoto(
+    val id: String,
+    val fileName: String,
+    val folderPath: String,
+    val burstGroupId: String?,
+    val isHero: Boolean,
+    val burstCount: Int,
+    val qualityScore: Float?,
+    val faceCount: Int?
+)
+
 data class PhotoItem(
     val id: String,
     val fileName: String,
@@ -68,7 +79,8 @@ data class PhotoItem(
     val burstGroupId: String? = null,
     val isHero: Boolean = true,
     val burstCount: Int = 1,
-    val qualityScore: Float? = null
+    val qualityScore: Float? = null,
+    val serverMediaId: String? = null
 ) {
     val displayFile: File
         get() = previewFile ?: jpegFile ?: localFile

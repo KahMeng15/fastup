@@ -439,8 +439,21 @@ class ApiClient(
      * GET /api/staging/:sessionId
      */
     suspend fun fetchSessionUploadedFiles(sessionId: String): Set<String> = withContext(Dispatchers.IO) {
+        val serverPhotos = fetchSessionPhotos(sessionId, view = "all")
+        serverPhotos.map { it.fileName }.filter { it.isNotBlank() }.toSet()
+    }
+
+    /**
+     * Fetch photos for a staging session with curation info (burst_group_id, is_hero, burst_count, quality_score).
+     * GET /api/staging/:sessionId?view=curated or ?view=all
+     */
+    suspend fun fetchSessionPhotos(
+        sessionId: String,
+        view: String = "all"
+    ): List<com.fastup.model.ServerStagingPhoto> = withContext(Dispatchers.IO) {
         try {
-            val endpoint = cleanUrl("api/staging/${sessionId.trim().trimStart('/')}")
+            val cleanSession = sessionId.trim().trimStart('/')
+            val endpoint = cleanUrl("api/staging/$cleanSession?view=$view")
             val request = Request.Builder()
                 .url(endpoint)
                 .addHeader("x-api-key", apiKey)
@@ -448,21 +461,148 @@ class ApiClient(
                 .build()
 
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext emptySet()
-                val bodyStr = response.body?.string() ?: return@withContext emptySet()
+                if (!response.isSuccessful) return@withContext emptyList()
+                val bodyStr = response.body?.string() ?: return@withContext emptyList()
                 val obj = JSONObject(bodyStr)
-                val photosArr = obj.optJSONArray("photos") ?: obj.optJSONArray("files") ?: return@withContext emptySet()
-                val set = mutableSetOf<String>()
+                val photosArr = obj.optJSONArray("photos") ?: obj.optJSONArray("files") ?: return@withContext emptyList()
+                val resultList = mutableListOf<com.fastup.model.ServerStagingPhoto>()
                 for (i in 0 until photosArr.length()) {
                     val f = photosArr.getJSONObject(i)
+                    val id = f.optString("id")
                     val name = f.optString("file_name").ifBlank { f.optString("fileName") }
-                    if (name.isNotBlank()) set.add(name)
+                    val folderPath = f.optString("folder_path")
+                    val burstGroupId = if (f.isNull("burst_group_id")) null else f.optString("burst_group_id").ifBlank { null }
+                    val isHero = if (f.isNull("is_hero")) true else f.optBoolean("is_hero", true)
+                    val burstCount = f.optInt("burst_count", 1)
+                    val qualityScore = if (f.isNull("quality_score")) null else f.optDouble("quality_score").toFloat()
+                    val faceCount = if (f.isNull("face_count")) null else f.optInt("face_count")
+
+                    if (name.isNotBlank()) {
+                        resultList.add(
+                            com.fastup.model.ServerStagingPhoto(
+                                id = id,
+                                fileName = name,
+                                folderPath = folderPath,
+                                burstGroupId = burstGroupId,
+                                isHero = isHero,
+                                burstCount = burstCount,
+                                qualityScore = qualityScore,
+                                faceCount = faceCount
+                            )
+                        )
+                    }
                 }
-                set
+                resultList
             }
         } catch (e: Exception) {
-            Log.w("ApiClient", "Error fetching session uploaded files: ${e.message}")
-            emptySet()
+            Log.w("ApiClient", "Error fetching session photos: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * Fetch burst sequence alternates for a given media ID.
+     * GET /api/staging/media/:id/alternates
+     */
+    suspend fun fetchAlternates(mediaId: String): List<com.fastup.model.ServerStagingPhoto> = withContext(Dispatchers.IO) {
+        try {
+            val endpoint = cleanUrl("api/staging/media/$mediaId/alternates")
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("x-api-key", apiKey)
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptyList()
+                val bodyStr = response.body?.string() ?: return@withContext emptyList()
+                val obj = JSONObject(bodyStr)
+                val alternatesArr = obj.optJSONArray("alternates") ?: return@withContext emptyList()
+                val resultList = mutableListOf<com.fastup.model.ServerStagingPhoto>()
+                for (i in 0 until alternatesArr.length()) {
+                    val f = alternatesArr.getJSONObject(i)
+                    val id = f.optString("id")
+                    val name = f.optString("file_name").ifBlank { f.optString("fileName") }
+                    val folderPath = f.optString("folder_path")
+                    val burstGroupId = if (f.isNull("burst_group_id")) null else f.optString("burst_group_id").ifBlank { null }
+                    val isHero = if (f.isNull("is_hero")) true else f.optBoolean("is_hero", true)
+                    val burstCount = f.optInt("burst_count", 1)
+                    val qualityScore = if (f.isNull("quality_score")) null else f.optDouble("quality_score").toFloat()
+                    val faceCount = if (f.isNull("face_count")) null else f.optInt("face_count")
+
+                    if (name.isNotBlank()) {
+                        resultList.add(
+                            com.fastup.model.ServerStagingPhoto(
+                                id = id,
+                                fileName = name,
+                                folderPath = folderPath,
+                                burstGroupId = burstGroupId,
+                                isHero = isHero,
+                                burstCount = burstCount,
+                                qualityScore = qualityScore,
+                                faceCount = faceCount
+                            )
+                        )
+                    }
+                }
+                resultList
+            }
+        } catch (e: Exception) {
+            Log.w("ApiClient", "Error fetching alternates: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * Set a photo as the primary Hero of its burst group.
+     * POST /api/staging/media/:id/set-hero
+     */
+    suspend fun setHeroPhoto(mediaId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val endpoint = cleanUrl("api/staging/media/$mediaId/set-hero")
+            val emptyBody = okhttp3.RequestBody.create(null, ByteArray(0))
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("x-api-key", apiKey)
+                .post(emptyBody)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(true)
+                } else {
+                    Result.failure(IOException("Server HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Toggle visibility (curated vs hidden) for an alternate photo.
+     * POST /api/staging/media/:id/toggle-visibility
+     */
+    suspend fun togglePhotoVisibility(mediaId: String, show: Boolean): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val endpoint = cleanUrl("api/staging/media/$mediaId/toggle-visibility")
+            val jsonBody = JSONObject().apply { put("show", show) }
+            val reqBody = jsonBody.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("x-api-key", apiKey)
+                .post(reqBody)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(true)
+                } else {
+                    Result.failure(IOException("Server HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 }

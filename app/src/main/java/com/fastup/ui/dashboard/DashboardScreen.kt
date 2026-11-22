@@ -1,12 +1,27 @@
 package com.fastup.ui.dashboard
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.BitmapFactory
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiInfo
+import android.net.wifi.WifiManager
+import android.os.BatteryManager
+import android.os.Build
+import android.telephony.TelephonyManager
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -17,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,6 +74,102 @@ fun DashboardScreen(
     val liveViewerMode by viewModel.liveViewerMode.collectAsState()
     val liveViewBitmap by viewModel.liveViewBitmap.collectAsState()
     val isLiveViewStreaming by viewModel.isLiveViewStreaming.collectAsState()
+    val cameraBattery by viewModel.cameraBattery.collectAsState()
+
+    // Real-time Phone Battery Tracking
+    var phoneBatteryLevel by remember { mutableIntStateOf(100) }
+    var isPhoneCharging by remember { mutableStateOf(false) }
+
+    DisposableEffect(context) {
+        val batteryReceiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                if (intent?.action == Intent.ACTION_BATTERY_CHANGED) {
+                    val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                    val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                    if (level >= 0 && scale > 0) {
+                        phoneBatteryLevel = (level * 100) / scale
+                    }
+                    val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                    isPhoneCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                            status == BatteryManager.BATTERY_STATUS_FULL
+                }
+            }
+        }
+        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        val initialStatus = context.registerReceiver(batteryReceiver, filter)
+        initialStatus?.let { intent ->
+            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+            if (level >= 0 && scale > 0) {
+                phoneBatteryLevel = (level * 100) / scale
+            }
+            val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+            isPhoneCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                    status == BatteryManager.BATTERY_STATUS_FULL
+        }
+        onDispose {
+            try {
+                context.unregisterReceiver(batteryReceiver)
+            } catch (_: Exception) {}
+        }
+    }
+
+    // Network Strength & Type Tracking
+    var networkInfoText by remember { mutableStateOf("Checking...") }
+    var networkIcon by remember { mutableStateOf(Icons.Default.Wifi) }
+    var networkColor by remember { mutableStateOf(Emerald500) }
+
+    LaunchedEffect(Unit) {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        while (true) {
+            try {
+                if (cm != null) {
+                    val activeNetwork = cm.activeNetwork
+                    val capabilities = cm.getNetworkCapabilities(activeNetwork)
+                    if (capabilities != null) {
+                        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                            var wifiDetails = "Wi-Fi"
+                            try {
+                                val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                                val wifiInfo = wm?.connectionInfo
+                                if (wifiInfo != null) {
+                                    val rssi = wifiInfo.rssi
+                                    val ssid = wifiInfo.ssid?.replace("\"", "")?.takeIf { it.isNotBlank() && it != "<unknown ssid>" }
+                                    wifiDetails = if (ssid != null && rssi != -127) "$ssid (${rssi}dBm)" else if (rssi != -127) "Wi-Fi (${rssi}dBm)" else "Wi-Fi"
+                                }
+                            } catch (_: Exception) {
+                                wifiDetails = "Wi-Fi"
+                            }
+                            networkInfoText = wifiDetails
+                            networkIcon = Icons.Default.Wifi
+                            networkColor = Emerald500
+                        } else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                            networkInfoText = "Cellular (Active)"
+                            networkIcon = Icons.Default.SignalCellularAlt
+                            networkColor = Emerald500
+                        } else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+                            networkInfoText = "Ethernet"
+                            networkIcon = Icons.Default.Lan
+                            networkColor = Emerald500
+                        } else {
+                            networkInfoText = "Connected"
+                            networkIcon = Icons.Default.Wifi
+                            networkColor = Emerald500
+                        }
+                    } else {
+                        networkInfoText = "Offline"
+                        networkIcon = Icons.Default.WifiOff
+                        networkColor = Rose500
+                    }
+                }
+            } catch (e: Exception) {
+                networkInfoText = "Online"
+                networkIcon = Icons.Default.Wifi
+                networkColor = Emerald500
+            }
+            delay(4000)
+        }
+    }
 
     // Manage Live View streaming lifecycle based on mode
     DisposableEffect(liveViewerMode, cameraState) {
@@ -75,43 +187,197 @@ fun DashboardScreen(
 
     val latestPhoto = photos.firstOrNull()
 
+    // Header label timeout when idle (stays visible for 4s, fades on idle, tap screen to reveal)
+    var isHeaderVisible by remember { mutableStateOf(true) }
+    var lastInteractionTimestamp by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(lastInteractionTimestamp) {
+        delay(4000)
+        isHeaderVisible = false
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(PureBlack)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                lastInteractionTimestamp = System.currentTimeMillis()
+                isHeaderVisible = true
+            },
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // App Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        // 1. Heading (Fades out when not interacted with)
+        AnimatedVisibility(
+            visible = isHeaderVisible,
+            enter = fadeIn(),
+            exit = fadeOut()
         ) {
-            Text(
-                text = "FastUp Dashboard",
-                color = Slate100,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold
-            )
-            if (liveViewerMode != LiveViewerMode.DISABLED) {
-                Surface(
-                    color = Blue500.copy(alpha = 0.15f),
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, Blue500.copy(alpha = 0.3f))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+                    .padding(top = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "FastUp Dashboard",
+                    color = Slate100,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        // 2. View finder / Quick preview (Full available width, edge-to-edge with no rounded corners or border)
+        if (liveViewerMode == LiveViewerMode.INSTANT_CAPTURE && latestPhoto != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(3f / 2f)
+                    .background(Color.Black)
+                    .clickable { onPhotoClick(latestPhoto.id) },
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = latestPhoto.displayFile,
+                    contentDescription = "Latest Photo Preview",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // Top Bar Overlay
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (liveViewerMode == LiveViewerMode.LIVE_VIEWFINDER) "LIVE VIEW" else "AUTO PREVIEW",
-                        color = Blue400,
-                        fontSize = 10.sp,
+                        text = "LATEST CAPTURE: ${latestPhoto.fileName}",
+                        color = Slate100,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
+
+                    Text(
+                        text = "Tap to inspect",
+                        color = Slate300,
+                        fontSize = 10.sp
+                    )
+                }
+            }
+        } else if (liveViewerMode == LiveViewerMode.LIVE_VIEWFINDER) {
+            val frameBitmap = remember(liveViewBitmap) {
+                liveViewBitmap?.asImageBitmap()
+            }
+            val liveViewAspect = if (frameBitmap != null && frameBitmap.height > 0) {
+                frameBitmap.width.toFloat() / frameBitmap.height.toFloat()
+            } else {
+                3f / 2f
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(liveViewAspect)
+                    .background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                if (frameBitmap != null) {
+                    Image(
+                        bitmap = frameBitmap,
+                        contentDescription = "Live View Stream",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        if (cameraState == CameraConnectionState.CONNECTED) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = Blue400,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Connecting to camera live viewfinder stream...",
+                                color = Slate300,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.VideocamOff,
+                                contentDescription = null,
+                                tint = Slate500,
+                                modifier = Modifier.size(32.dp)
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Connect camera via USB-C to view live stream",
+                                color = Slate400,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+
+                // Live Stream Header Overlay
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .background(Color.Black.copy(alpha = 0.65f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (isLiveViewStreaming) "LIVE VIEWFINDER (SENSOR)" else "VIEWFINDER PAUSED",
+                        color = Slate100,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    if (cameraState == CameraConnectionState.CONNECTED) {
+                        FilledTonalButton(
+                            onClick = {
+                                if (isLiveViewStreaming) viewModel.stopLiveView() else viewModel.startLiveView()
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(24.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = if (isLiveViewStreaming) Slate700 else Blue600,
+                                contentColor = Slate100
+                            )
+                        ) {
+                            Text(
+                                text = if (isLiveViewStreaming) "Pause" else "Resume",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        // Side-by-Side: Local Transfer & Upload Pipeline Cards
+        // 3. Status Cards (Local Transfer & Upload Pipeline)
         val (cameraStatusText, cameraStatusColor) = when (cameraState) {
             CameraConnectionState.CONNECTED -> Pair("Ready", Emerald500)
             CameraConnectionState.CAPTURING -> Pair("Capturing", Amber500)
@@ -139,7 +405,9 @@ fun DashboardScreen(
         }
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Box(modifier = Modifier.weight(1f)) {
@@ -192,192 +460,136 @@ fun DashboardScreen(
             }
         }
 
-        // Dedicated Live Viewer Section (if enabled)
-        if (liveViewerMode == LiveViewerMode.INSTANT_CAPTURE && latestPhoto != null) {
-            Card(
+        // Device & Network Telemetry Card (Unified card matching TransferPipelineCard styling)
+        val phoneBatteryColor = when {
+            phoneBatteryLevel > 20 -> Emerald500
+            phoneBatteryLevel > 10 -> Amber500
+            else -> Rose500
+        }
+        val cameraBatteryColor = when {
+            cameraBattery == null -> Slate400
+            cameraBattery!! > 20 -> Emerald500
+            cameraBattery!! > 10 -> Amber500
+            else -> Rose500
+        }
+        val cameraBatteryText = if (cameraState == CameraConnectionState.CONNECTED) {
+            if (cameraBattery != null) "$cameraBattery%" else "Ready"
+        } else {
+            "--"
+        }
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, DarkBorder)
+        ) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(3f / 2f),
-                colors = CardDefaults.cardColors(containerColor = Color.Black),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, DarkBorder)
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black)
-                        .clickable { onPhotoClick(latestPhoto.id) },
-                    contentAlignment = Alignment.Center
+                // Section 1: Network Strength
+                Column(
+                    modifier = Modifier.weight(1.2f),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
-                    AsyncImage(
-                        model = latestPhoto.displayFile,
-                        contentDescription = "Latest Photo Preview",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize()
+                    Text(
+                        text = "NETWORK",
+                        color = Slate400,
+                        fontSize = 9.sp,
+                        lineHeight = 11.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
-
-                    // Top Bar Overlay
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.TopCenter)
-                            .background(Color.Black.copy(alpha = 0.55f))
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(7.dp)
-                                    .background(Emerald500, CircleShape)
-                            )
-                            Text(
-                                text = "LATEST CAPTURE: ${latestPhoto.fileName}",
-                                color = Slate100,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        Text(
-                            text = "Tap to inspect",
-                            color = Slate300,
-                            fontSize = 10.sp
-                        )
-                    }
+                    Text(
+                        text = networkInfoText,
+                        color = networkColor,
+                        fontSize = 11.sp,
+                        lineHeight = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-            }
-        } else if (liveViewerMode == LiveViewerMode.LIVE_VIEWFINDER) {
-            val frameBitmap = remember(liveViewBitmap) {
-                liveViewBitmap?.asImageBitmap()
-            }
-            val liveViewAspect = if (frameBitmap != null && frameBitmap.height > 0) {
-                frameBitmap.width.toFloat() / frameBitmap.height.toFloat()
-            } else {
-                3f / 2f
-            }
 
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(liveViewAspect),
-                colors = CardDefaults.cardColors(containerColor = Color.Black),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, if (isLiveViewStreaming) Emerald500.copy(alpha = 0.5f) else DarkBorder)
-            ) {
+                // Vertical Divider
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
+                        .width(1.dp)
+                        .height(26.dp)
+                        .background(DarkBorder)
+                )
+
+                // Section 2: Mobile Device Battery
+                Column(
+                    modifier = Modifier
+                        .weight(0.9f)
+                        .padding(horizontal = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
-                    if (frameBitmap != null) {
-                        Image(
-                            bitmap = frameBitmap,
-                            contentDescription = "Live View Stream",
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            if (cameraState == CameraConnectionState.CONNECTED) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(24.dp),
-                                    color = Blue400,
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "Connecting to camera live viewfinder stream...",
-                                    color = Slate300,
-                                    fontSize = 12.sp,
-                                    textAlign = TextAlign.Center
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.VideocamOff,
-                                    contentDescription = null,
-                                    tint = Slate500,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = "Connect camera via USB-C to view live stream",
-                                    color = Slate400,
-                                    fontSize = 12.sp,
-                                    textAlign = TextAlign.Center
-                                )
-                            }
-                        }
-                    }
+                    Text(
+                        text = "PHONE BATT",
+                        color = Slate400,
+                        fontSize = 9.sp,
+                        lineHeight = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "$phoneBatteryLevel%${if (isPhoneCharging) " ⚡" else ""}",
+                        color = phoneBatteryColor,
+                        fontSize = 11.sp,
+                        lineHeight = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1
+                    )
+                }
 
-                    // Live Stream Header Overlay
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.TopCenter)
-                            .background(Color.Black.copy(alpha = 0.65f))
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(7.dp)
-                                    .background(if (isLiveViewStreaming) Emerald500 else Rose500, CircleShape)
-                            )
-                            Text(
-                                text = if (isLiveViewStreaming) "LIVE VIEWFINDER (SENSOR)" else "VIEWFINDER PAUSED",
-                                color = Slate100,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                // Vertical Divider
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(26.dp)
+                        .background(DarkBorder)
+                )
 
-                        if (cameraState == CameraConnectionState.CONNECTED) {
-                            FilledTonalButton(
-                                onClick = {
-                                    if (isLiveViewStreaming) viewModel.stopLiveView() else viewModel.startLiveView()
-                                },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                modifier = Modifier.height(24.dp),
-                                colors = ButtonDefaults.filledTonalButtonColors(
-                                    containerColor = if (isLiveViewStreaming) Slate700 else Blue600,
-                                    contentColor = Slate100
-                                )
-                            ) {
-                                Text(
-                                    text = if (isLiveViewStreaming) "Pause" else "Resume",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
+                // Section 3: Camera Battery
+                Column(
+                    modifier = Modifier
+                        .weight(0.9f)
+                        .padding(start = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                ) {
+                    Text(
+                        text = "CAM BATT",
+                        color = Slate400,
+                        fontSize = 9.sp,
+                        lineHeight = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = cameraBatteryText,
+                        color = cameraBatteryColor,
+                        fontSize = 11.sp,
+                        lineHeight = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1
+                    )
                 }
             }
         }
 
-        // Recent Images Grid Section filling remaining free space
+        // 4. Recent Captures Grid Section filling remaining free space
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .padding(bottom = 6.dp)
                 .weight(1f),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {

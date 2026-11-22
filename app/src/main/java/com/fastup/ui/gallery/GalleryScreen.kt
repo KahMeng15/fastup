@@ -1,6 +1,7 @@
 package com.fastup.ui.gallery
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -35,10 +36,15 @@ fun GalleryScreen(
 ) {
     val photos by viewModel.photos.collectAsState()
     val curationMode by viewModel.curationViewMode.collectAsState()
+    val isSyncingCuration by viewModel.isSyncingCuration.collectAsState()
     val displayedPhotos = if (curationMode == "curated") {
         photos.filter { it.isHero || it.burstGroupId == null }
     } else {
         photos
+    }
+
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        viewModel.syncCuration()
     }
 
     Column(
@@ -61,39 +67,64 @@ fun GalleryScreen(
                 fontWeight = FontWeight.Bold
             )
 
-            // Staging View Toggle Pill
+            // Staging View Toggle Pill & Sync Action
             Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0xFF1E293B))
-                    .padding(2.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Surface(
-                    color = if (curationMode == "curated") Amber500.copy(alpha = 0.25f) else Color.Transparent,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.clickable { viewModel.setCurationViewMode("curated") }
+                IconButton(
+                    onClick = { viewModel.syncCuration() },
+                    modifier = Modifier.size(28.dp)
                 ) {
-                    Text(
-                        text = "★ Curated",
-                        color = if (curationMode == "curated") Amber400 else Slate400,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                    if (isSyncingCuration) {
+                        CircularProgressIndicator(
+                            color = Amber400,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Sync Curation from Server",
+                            tint = Slate400,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
-                Surface(
-                    color = if (curationMode == "all") Slate700 else Color.Transparent,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.clickable { viewModel.setCurationViewMode("all") }
+
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xFF1E293B))
+                        .padding(2.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "All (${photos.size})",
-                        color = if (curationMode == "all") Slate100 else Slate400,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                    Surface(
+                        color = if (curationMode == "curated") Amber500.copy(alpha = 0.25f) else Color.Transparent,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.clickable { viewModel.setCurationViewMode("curated") }
+                    ) {
+                        Text(
+                            text = "★ Curated",
+                            color = if (curationMode == "curated") Amber400 else Slate400,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    Surface(
+                        color = if (curationMode == "all") Slate700 else Color.Transparent,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.clickable { viewModel.setCurationViewMode("all") }
+                    ) {
+                        Text(
+                            text = "All (${photos.size})",
+                            color = if (curationMode == "all") Slate100 else Slate400,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
         }
@@ -137,15 +168,33 @@ fun GalleryScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(displayedPhotos, key = { it.id }) { photo ->
-                    PhotoGridItem(photo = photo, onClick = { onPhotoClick(photo.id) })
+                    PhotoGridItem(
+                        photo = photo,
+                        onClick = { onPhotoClick(photo.id) },
+                        onBurstClick = {
+                            viewModel.openBurstDrawer(photo)
+                        }
+                    )
                 }
             }
         }
     }
+
+    // Burst Sequence Stack Drawer (hellomyphotos aligned)
+    BurstStackDrawer(
+        viewModel = viewModel,
+        onPhotoSelect = { photoId ->
+            onPhotoClick(photoId)
+        }
+    )
 }
 
 @Composable
-fun PhotoGridItem(photo: PhotoItem, onClick: () -> Unit) {
+fun PhotoGridItem(
+    photo: PhotoItem,
+    onClick: () -> Unit,
+    onBurstClick: (() -> Unit)? = null
+) {
     Box(
         modifier = Modifier
             .aspectRatio(1f)
@@ -181,21 +230,35 @@ fun PhotoGridItem(photo: PhotoItem, onClick: () -> Unit) {
             )
         }
 
-        // Burst Count Badge
+        // Burst Count Badge with clickable stack icon
         if (photo.burstCount > 1) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(4.dp)
-                    .background(Color(0xCC0F172A), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xE60F172A))
+                    .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                    .clickable { onBurstClick?.invoke() }
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
             ) {
-                Text(
-                    text = "★ ${photo.burstCount}",
-                    color = Amber400,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Layers,
+                        contentDescription = "View Burst Sequence",
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = "${photo.burstCount}",
+                        color = Slate100,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 

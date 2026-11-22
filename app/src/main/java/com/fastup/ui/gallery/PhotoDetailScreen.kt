@@ -56,6 +56,11 @@ fun PhotoDetailScreen(
                     IconButton(onClick = { viewModel.retryPhoto(photo.id) }) {
                         Icon(Icons.Default.Upload, contentDescription = "Upload", tint = Blue500)
                     }
+                    if (photo.burstGroupId != null || photo.burstCount > 1) {
+                        IconButton(onClick = { viewModel.openBurstDrawer(photo) }) {
+                            Icon(Icons.Default.Layers, contentDescription = "View Burst Stack", tint = Color(0xFF38BDF8))
+                        }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Slate900)
             )
@@ -155,12 +160,77 @@ fun PhotoDetailScreen(
                         )
                     }
 
+                    if (photo.burstGroupId != null || photo.burstCount > 1) {
+                        HorizontalDivider(color = Slate700, thickness = 1.dp)
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("AI Curation Role", color = Slate400, fontSize = 13.sp)
+                            Text(
+                                if (photo.isHero) "★ Primary Pick (Hero)" else "Alternate Shot",
+                                color = if (photo.isHero) Amber400 else Slate300,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Burst Sequence Size", color = Slate400, fontSize = 13.sp)
+                            Text(
+                                "${photo.burstCount} shots",
+                                color = Slate100,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
+                        photo.qualityScore?.let { score ->
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Quality / Sharpness", color = Slate400, fontSize = 13.sp)
+                                Text(
+                                    String.format("%.1f", score),
+                                    color = Slate100,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = { viewModel.openBurstDrawer(photo) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF38BDF8).copy(alpha = 0.15f),
+                                contentColor = Color(0xFF7DD3FC)
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Layers,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "View Burst Stack (${photo.burstCount} shots)",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+
                     photo.errorMessage?.let { err ->
                         Text("Error: $err", color = Rose500, fontSize = 12.sp)
                     }
                 }
             }
         }
+
+        BurstStackDrawer(
+            viewModel = viewModel,
+            onPhotoSelect = { /* Already in detail screen */ }
+        )
     }
 }
 

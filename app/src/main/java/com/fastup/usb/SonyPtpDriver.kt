@@ -142,6 +142,79 @@ class SonyPtpDriver(
         }
     }
 
+    /**
+     * Queries all extended device property data (0x9209) from Sony camera.
+     * Looks for battery percentage property (0xD218 or 0xD20E / 0xD205).
+     */
+    fun queryBatteryLevel(): Int? {
+        return try {
+            val tid = nextTransactionId()
+            val cmd = PtpPacket.createCommand(SonyPtpConstants.SONY_OP_SDIO_GET_ALL_EXT_DEVICE_INFO, tid)
+            if (!sendBulk(cmd)) return null
+
+            val buffer = ByteArray(32768)
+            val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 3000)
+            if (read < PtpPacket.HEADER_SIZE) return null
+
+            val header = PtpPacket.parseHeader(buffer)
+            if (header.type != SonyPtpConstants.PTP_CONTAINER_DATA) {
+                readTransactionResponse(timeoutMs = 500)
+                return null
+            }
+
+            val totalDataLen = (header.length - PtpPacket.HEADER_SIZE).toInt()
+            val bos = ByteArrayOutputStream(if (totalDataLen > 0) totalDataLen else 4096)
+            val firstChunk = read - PtpPacket.HEADER_SIZE
+            if (firstChunk > 0) {
+                bos.write(buffer, PtpPacket.HEADER_SIZE, minOf(firstChunk, totalDataLen))
+            }
+
+            while (bos.size() < totalDataLen) {
+                val chunk = connection.bulkTransfer(bulkIn, buffer, buffer.size, 3000)
+                if (chunk <= 0) break
+                val toWrite = minOf(chunk, totalDataLen - bos.size())
+                bos.write(buffer, 0, toWrite)
+            }
+
+            // Consume trailing response container
+            readTransactionResponse(timeoutMs = 500)
+
+            val data = bos.toByteArray()
+            if (data.size < 4) return null
+
+            // Scan for Sony battery property code 0xD218 (or 0xD20E)
+            // Binary layout per dataset: uint16 code, uint16 dataType, uint8 getSet, uint8 isEnable, defaultVal, currentVal
+            var batteryVal: Int? = null
+            for (i in 0 until data.size - 6) {
+                val code = (data[i].toInt() and 0xFF) or ((data[i + 1].toInt() and 0xFF) shl 8)
+                if (code == 0xD218 || code == 0xD20E) {
+                    val dt = (data[i + 2].toInt() and 0xFF) or ((data[i + 3].toInt() and 0xFF) shl 8)
+                    val offset = i + 6 // after code(2), type(2), getSet(1), isEnable(1)
+                    val candidate = when (dt) {
+                        0x0001, 0x0002 -> { // INT8 / UINT8: default(1), current(1)
+                            if (offset + 1 < data.size) data[offset + 1].toInt() and 0xFF else null
+                        }
+                        0x0003, 0x0004 -> { // INT16 / UINT16: default(2), current(2)
+                            if (offset + 3 < data.size) {
+                                (data[offset + 2].toInt() and 0xFF) or ((data[offset + 3].toInt() and 0xFF) shl 8)
+                            } else null
+                        }
+                        else -> null
+                    }
+                    if (candidate != null && candidate in 0..100) {
+                        batteryVal = candidate
+                        Log.i(TAG, "Parsed battery level from 0x${code.toString(16)}: $batteryVal%")
+                        break
+                    }
+                }
+            }
+            batteryVal
+        } catch (e: Exception) {
+            Log.w(TAG, "queryBatteryLevel error: ${e.message}")
+            null
+        }
+    }
+
     fun closeSession() {
         if (!sessionOpen) return
         try {
@@ -180,9 +253,10 @@ class SonyPtpDriver(
     private val liveViewBuffer by lazy { ByteArray(bulkIn.maxPacketSize.coerceAtLeast(16384)) }
 
     /**
-     * Polls the Interrupt IN endpoint for incoming PTP event (e.g. ObjectAdded or Sony ObjectReady).
+     * Polls the Interrupt IN endpoint for incoming PTP event (e.g. ObjectAdded, Sony ObjectReady, or PropChanged).
+     * Returns Triple(eventCode, param1, param2)
      */
-    fun pollEvent(timeoutMs: Int = 200): Pair<Int, Int?>? {
+    fun pollEvent(timeoutMs: Int = 200): Triple<Int, Int?, Int?>? {
         val ep = interruptIn ?: return null
         val buffer = interruptBuffer ?: return null
         val read = connection.bulkTransfer(ep, buffer, buffer.size, timeoutMs)
@@ -190,11 +264,16 @@ class SonyPtpDriver(
             val header = PtpPacket.parseHeader(buffer)
             if (header.type == SonyPtpConstants.PTP_CONTAINER_EVENT) {
                 var param1: Int? = null
+                var param2: Int? = null
                 if (header.length >= 16 && read >= 16) {
                     val bb = ByteBuffer.wrap(buffer, 12, 4).order(ByteOrder.LITTLE_ENDIAN)
                     param1 = bb.int
                 }
-                return Pair(header.code, param1)
+                if (header.length >= 20 && read >= 20) {
+                    val bb = ByteBuffer.wrap(buffer, 16, 4).order(ByteOrder.LITTLE_ENDIAN)
+                    param2 = bb.int
+                }
+                return Triple(header.code, param1, param2)
             }
         }
         return null
@@ -603,6 +682,8 @@ class SonyPtpDriver(
             val sent = connection.bulkTransfer(bulkOut, data, data.size, 2000)
             if (sent >= 0) return true
             Log.w(TAG, "bulkTransfer write failed (sent=$sent, attempt $attempt/$retries)")
+            // Clear endpoint halt to restore USB pipe toggle alignment
+            clearHalt()
             // If bulkOut is rejected, camera may have pending bytes on bulkIn blocking the pipe
             val drainBuf = ByteArray(16384)
             while (connection.bulkTransfer(bulkIn, drainBuf, drainBuf.size, 100) > 0) {}

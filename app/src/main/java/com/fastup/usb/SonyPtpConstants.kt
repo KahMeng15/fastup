@@ -32,11 +32,14 @@ object SonyPtpConstants {
     const val PTP_OP_DELETE_OBJECT = 0x100B
 
     const val PTP_OP_GET_DEVICE_PROP_VALUE = 0x1015
+    const val PTP_DPC_BATTERY_LEVEL = 0x5001
+    const val SONY_DPC_BATTERY_LEVEL = 0xD218
     const val SONY_DPC_OBJECT_IN_MEMORY = 0xD215
 
     // Sony Vendor Specific PTP Opcodes
     const val SONY_OP_SDIO_CONNECT = 0x9201
     const val SONY_OP_SDIO_GET_EXT_DEVICE_INFO = 0x9202
+    const val SONY_OP_SDIO_GET_ALL_EXT_DEVICE_INFO = 0x9209
     const val SONY_OP_CAPTURE = 0x9207
 
     // PTP Response Codes

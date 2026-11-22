@@ -17,6 +17,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -164,14 +165,15 @@ fun MainAppScaffold(viewModel: MainViewModel) {
                     containerColor = PureBlack,
                     contentColor = Slate100,
                     tonalElevation = 0.dp,
-                    modifier = Modifier.border(
-                        androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-                    )
+                    modifier = Modifier
+                        .height(56.dp)
+                        .border(
+                            androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+                        )
                 ) {
                     items.forEach { screen ->
                         NavigationBarItem(
                             icon = { Icon(screen.icon, contentDescription = screen.title) },
-                            label = { Text(screen.title, fontSize = 11.sp) },
                             selected = currentRoute == screen.route,
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = Blue400,

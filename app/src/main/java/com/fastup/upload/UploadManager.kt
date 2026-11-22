@@ -167,16 +167,23 @@ class UploadManager(private val context: Context) {
         }
     }
 
-    fun syncUploadedFilesWithServer() {
+    fun syncUploadedFilesWithServer(onComplete: (() -> Unit)? = null) {
         scope.launch {
             try {
-                val serverFiles = apiClient.fetchSessionUploadedFiles(currentSessionId)
-                if (serverFiles.isNotEmpty()) {
+                val serverPhotos = apiClient.fetchSessionPhotos(currentSessionId, view = "all")
+                if (serverPhotos.isNotEmpty()) {
                     val editor = uploadedPrefs.edit()
-                    serverFiles.forEach { fileName ->
+                    // Build lookup map by filename and filename without extension
+                    val curationByFileName = mutableMapOf<String, com.fastup.model.ServerStagingPhoto>()
+                    val curationByBaseName = mutableMapOf<String, com.fastup.model.ServerStagingPhoto>()
+
+                    serverPhotos.forEach { sp ->
+                        val fileName = sp.fileName
                         editor.putBoolean(fileName, true)
                         val base = fileName.substringBeforeLast(".")
                         editor.putBoolean(base, true)
+                        curationByFileName[fileName] = sp
+                        curationByBaseName[base] = sp
                     }
                     editor.apply()
 
@@ -186,17 +193,43 @@ class UploadManager(private val context: Context) {
                                 (photo.rawFile != null && uploadedPrefs.getBoolean(photo.rawFile.name, false)) ||
                                 (photo.jpegFile != null && uploadedPrefs.getBoolean(photo.jpegFile.name, false)) ||
                                 uploadedPrefs.getBoolean(photo.fileName, false)
-                            if (isCompleted && photo.status != UploadStatus.COMPLETED) {
-                                photo.copy(status = UploadStatus.COMPLETED, uploadProgress = 1f, errorMessage = null)
+
+                            val baseName = photo.fileName.substringBeforeLast(".")
+                            val serverCuration = curationByFileName[photo.fileName]
+                                ?: (photo.jpegFile?.name?.let { curationByFileName[it] })
+                                ?: (photo.rawFile?.name?.let { curationByFileName[it] })
+                                ?: curationByBaseName[baseName]
+
+                            val newBurstGroupId = serverCuration?.burstGroupId ?: photo.burstGroupId
+                            val newIsHero = serverCuration?.isHero ?: photo.isHero
+                            val newBurstCount = serverCuration?.burstCount ?: photo.burstCount
+                            val newQualityScore = serverCuration?.qualityScore ?: photo.qualityScore
+                            val newServerMediaId = serverCuration?.id ?: photo.serverMediaId
+
+                            val newStatus = if (isCompleted && photo.status != UploadStatus.COMPLETED) {
+                                UploadStatus.COMPLETED
                             } else {
-                                photo
+                                photo.status
                             }
+
+                            photo.copy(
+                                status = newStatus,
+                                uploadProgress = if (newStatus == UploadStatus.COMPLETED) 1f else photo.uploadProgress,
+                                errorMessage = if (newStatus == UploadStatus.COMPLETED) null else photo.errorMessage,
+                                burstGroupId = newBurstGroupId,
+                                isHero = newIsHero,
+                                burstCount = newBurstCount,
+                                qualityScore = newQualityScore,
+                                serverMediaId = newServerMediaId
+                            )
                         }
                     }
-                    Log.i(TAG, "Synced ${serverFiles.size} uploaded files from server for session $currentSessionId")
+                    Log.i(TAG, "Synced ${serverPhotos.size} uploaded files and curation metadata from server for session $currentSessionId")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed syncing uploaded files with server: ${e.message}")
+            } finally {
+                onComplete?.invoke()
             }
         }
     }
@@ -547,6 +580,12 @@ class UploadManager(private val context: Context) {
                     )
                     else it
                 }
+            }
+
+            // Trigger server curation metadata sync with debounce / delay so server clustering completes
+            scope.launch {
+                kotlinx.coroutines.delay(2500)
+                syncUploadedFilesWithServer()
             }
         }
     }

@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class DashboardStats(
@@ -51,6 +52,9 @@ class MainViewModel : ViewModel() {
     private val _cameraModel = MutableStateFlow("Camera")
     val cameraModel: StateFlow<String> = _cameraModel.asStateFlow()
 
+    private val _cameraBattery = MutableStateFlow<Int?>(null)
+    val cameraBattery: StateFlow<Int?> = _cameraBattery.asStateFlow()
+
     private val _deviceTransferStats = MutableStateFlow(com.fastup.usb.DeviceTransferStats())
     val deviceTransferStats: StateFlow<com.fastup.usb.DeviceTransferStats> = _deviceTransferStats.asStateFlow()
 
@@ -60,8 +64,107 @@ class MainViewModel : ViewModel() {
     private val _curationViewMode = MutableStateFlow("curated")
     val curationViewMode: StateFlow<String> = _curationViewMode.asStateFlow()
 
+    private val _isSyncingCuration = MutableStateFlow(false)
+    val isSyncingCuration: StateFlow<Boolean> = _isSyncingCuration.asStateFlow()
+
+    // Burst Drawer State
+    private val _selectedBurstGroupId = MutableStateFlow<String?>(null)
+    val selectedBurstGroupId: StateFlow<String?> = _selectedBurstGroupId.asStateFlow()
+
+    private val _burstAlternates = MutableStateFlow<List<com.fastup.model.ServerStagingPhoto>>(emptyList())
+    val burstAlternates: StateFlow<List<com.fastup.model.ServerStagingPhoto>> = _burstAlternates.asStateFlow()
+
+    private val _isLoadingBurstAlternates = MutableStateFlow(false)
+    val isLoadingBurstAlternates: StateFlow<Boolean> = _isLoadingBurstAlternates.asStateFlow()
+
     fun setCurationViewMode(mode: String) {
         _curationViewMode.value = mode
+    }
+
+    fun syncCuration(onDone: (() -> Unit)? = null) {
+        if (_isSyncingCuration.value) {
+            onDone?.invoke()
+            return
+        }
+        _isSyncingCuration.value = true
+        uploadManager.syncUploadedFilesWithServer {
+            _isSyncingCuration.value = false
+            onDone?.invoke()
+        }
+    }
+
+    fun openBurstDrawer(photo: com.fastup.model.PhotoItem) {
+        val groupId = photo.burstGroupId
+        _selectedBurstGroupId.value = groupId ?: photo.id
+        _isLoadingBurstAlternates.value = true
+
+        viewModelScope.launch {
+            val mediaId = photo.serverMediaId
+            if (mediaId != null) {
+                val alternates = uploadManager.apiClient.fetchAlternates(mediaId)
+                if (alternates.isNotEmpty()) {
+                    _burstAlternates.value = alternates
+                    _isLoadingBurstAlternates.value = false
+                    return@launch
+                }
+            }
+
+            // Fallback: match from local photos in the same burst group
+            val localGroup = photos.value.filter {
+                (groupId != null && it.burstGroupId == groupId) || it.id == photo.id
+            }.map { p ->
+                com.fastup.model.ServerStagingPhoto(
+                    id = p.serverMediaId ?: p.id,
+                    fileName = p.fileName,
+                    folderPath = uploadManager.currentSessionId,
+                    burstGroupId = p.burstGroupId,
+                    isHero = p.isHero,
+                    burstCount = p.burstCount,
+                    qualityScore = p.qualityScore,
+                    faceCount = null
+                )
+            }
+            _burstAlternates.value = localGroup
+            _isLoadingBurstAlternates.value = false
+        }
+    }
+
+    fun closeBurstDrawer() {
+        _selectedBurstGroupId.value = null
+        _burstAlternates.value = emptyList()
+    }
+
+    fun setHeroPhoto(mediaId: String, onDone: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            val res = uploadManager.apiClient.setHeroPhoto(mediaId)
+            if (res.isSuccess) {
+                // Update burst alternates list locally
+                _burstAlternates.update { list ->
+                    list.map { it.copy(isHero = it.id == mediaId) }
+                }
+                // Refresh local photos & server sync
+                syncCuration()
+                onDone?.invoke(true)
+            } else {
+                onDone?.invoke(false)
+            }
+        }
+    }
+
+    fun togglePhotoVisibility(mediaId: String, currentIsHero: Boolean, onDone: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            val targetState = !currentIsHero
+            val res = uploadManager.apiClient.togglePhotoVisibility(mediaId, targetState)
+            if (res.isSuccess) {
+                _burstAlternates.update { list ->
+                    list.map { if (it.id == mediaId) it.copy(isHero = targetState) else it }
+                }
+                syncCuration()
+                onDone?.invoke(true)
+            } else {
+                onDone?.invoke(false)
+            }
+        }
     }
 
     init {
@@ -257,6 +360,11 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             manager.cameraModel.collect { model ->
                 _cameraModel.value = model
+            }
+        }
+        viewModelScope.launch {
+            manager.cameraBattery.collect { batt ->
+                _cameraBattery.value = batt
             }
         }
         viewModelScope.launch {
