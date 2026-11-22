@@ -56,7 +56,7 @@ fun DashboardScreen(
     val isUploadPaused by viewModel.isUploadPaused.collectAsState()
     val photos by viewModel.photos.collectAsState()
     val liveViewerMode by viewModel.liveViewerMode.collectAsState()
-    val liveViewFrame by viewModel.liveViewFrame.collectAsState()
+    val liveViewBitmap by viewModel.liveViewBitmap.collectAsState()
     val isLiveViewStreaming by viewModel.isLiveViewStreaming.collectAsState()
 
     // Manage Live View streaming lifecycle based on mode
@@ -254,14 +254,8 @@ fun DashboardScreen(
                 }
             }
         } else if (liveViewerMode == LiveViewerMode.LIVE_VIEWFINDER) {
-            val frameBitmap = remember(liveViewFrame) {
-                liveViewFrame?.let { bytes ->
-                    try {
-                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
+            val frameBitmap = remember(liveViewBitmap) {
+                liveViewBitmap?.asImageBitmap()
             }
             val liveViewAspect = if (frameBitmap != null && frameBitmap.height > 0) {
                 frameBitmap.width.toFloat() / frameBitmap.height.toFloat()

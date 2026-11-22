@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package com.fastup.usb
 
 import android.app.PendingIntent
@@ -68,11 +70,15 @@ class UsbCameraManager(
     private val _liveViewFrame = MutableStateFlow<ByteArray?>(null)
     val liveViewFrame: StateFlow<ByteArray?> = _liveViewFrame.asStateFlow()
 
+    private val _liveViewBitmap = MutableStateFlow<android.graphics.Bitmap?>(null)
+    val liveViewBitmap: StateFlow<android.graphics.Bitmap?> = _liveViewBitmap.asStateFlow()
+
     private val _isLiveViewStreaming = MutableStateFlow(false)
     val isLiveViewStreaming: StateFlow<Boolean> = _isLiveViewStreaming.asStateFlow()
 
     private var liveViewJob: Job? = null
     @Volatile private var isLiveViewPausedForCapture = false
+    @Volatile private var lastCaptureTimeMs = 0L
 
     fun startLiveView() {
         if (_isLiveViewStreaming.value || liveViewJob?.isActive == true) return
@@ -107,6 +113,14 @@ class UsbCameraManager(
 
                 if (frame != null && frame.isNotEmpty()) {
                     _liveViewFrame.value = frame
+                    val bmp = try {
+                        android.graphics.BitmapFactory.decodeByteArray(frame, 0, frame.size)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (bmp != null) {
+                        _liveViewBitmap.value = bmp
+                    }
                     Log.d(TAG, "Live view frame updated: ${frame.size} bytes")
                 } else {
                     Log.d(TAG, "Live view frame was null, lastResp=0x${driver?.lastLiveViewResponseCode?.toString(16)}")
@@ -125,6 +139,7 @@ class UsbCameraManager(
         liveViewJob?.cancel()
         liveViewJob = null
         _liveViewFrame.value = null
+        _liveViewBitmap.value = null
     }
 
     private val usbReceiver = object : BroadcastReceiver() {
@@ -530,6 +545,7 @@ class UsbCameraManager(
                     )
                 }
             } finally {
+                lastCaptureTimeMs = System.currentTimeMillis()
                 com.fastup.FastUpApp.instance.uploadManager.refreshLocalFolders()
                 if (_connectionState.value == CameraConnectionState.CAPTURING) {
                     _connectionState.value = CameraConnectionState.CONNECTED
@@ -538,7 +554,8 @@ class UsbCameraManager(
                 // before resuming live view polling.
                 scope.launch {
                     delay(2500)
-                    if (photoChannel.isEmpty && !transferMutex.isLocked && _connectionState.value == CameraConnectionState.CONNECTED) {
+                    val elapsed = System.currentTimeMillis() - lastCaptureTimeMs
+                    if (elapsed >= 2400 && photoChannel.isEmpty && !transferMutex.isLocked && _connectionState.value == CameraConnectionState.CONNECTED) {
                         isLiveViewPausedForCapture = false
                     }
                 }
@@ -554,7 +571,7 @@ class UsbCameraManager(
         downloadJob?.cancel()
         downloadJob = null
         try {
-            driver?.closeSession()
+            driver?.release()
         } catch (e: Exception) {
             // Ignore close errors during disconnect
         }

@@ -163,6 +163,9 @@ class MainViewModel : ViewModel() {
     private val _liveViewFrame = MutableStateFlow<ByteArray?>(null)
     val liveViewFrame: StateFlow<ByteArray?> = _liveViewFrame.asStateFlow()
 
+    private val _liveViewBitmap = MutableStateFlow<android.graphics.Bitmap?>(null)
+    val liveViewBitmap: StateFlow<android.graphics.Bitmap?> = _liveViewBitmap.asStateFlow()
+
     private val _isLiveViewStreaming = MutableStateFlow(false)
     val isLiveViewStreaming: StateFlow<Boolean> = _isLiveViewStreaming.asStateFlow()
 
@@ -264,6 +267,11 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             manager.liveViewFrame.collect { frame ->
                 _liveViewFrame.value = frame
+            }
+        }
+        viewModelScope.launch {
+            manager.liveViewBitmap.collect { bitmap ->
+                _liveViewBitmap.value = bitmap
             }
         }
         viewModelScope.launch {

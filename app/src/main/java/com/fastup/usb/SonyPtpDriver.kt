@@ -148,7 +148,7 @@ class SonyPtpDriver(
             val tid = nextTransactionId()
             val cmd = PtpPacket.createCommand(SonyPtpConstants.PTP_OP_CLOSE_SESSION, tid)
             sendBulk(cmd)
-            readTransactionResponse()
+            readTransactionResponse(timeoutMs = 500)
             sessionOpen = false
             Log.i(TAG, "PTP Session closed")
         } catch (e: Exception) {
@@ -157,11 +157,34 @@ class SonyPtpDriver(
     }
 
     /**
+     * Completely releases the PTP session, releases claimed USB interfaces,
+     * and closes the native UsbDeviceConnection file descriptor.
+     */
+    fun release() {
+        closeSession()
+        try {
+            connection.releaseInterface(usbInterface)
+            Log.i(TAG, "Released USB interface: ${usbInterface.id}")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error releasing USB interface: ${e.message}")
+        }
+        try {
+            connection.close()
+            Log.i(TAG, "Closed native USB connection")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error closing USB connection: ${e.message}")
+        }
+    }
+
+    private val interruptBuffer by lazy { interruptIn?.let { ByteArray(it.maxPacketSize) } }
+    private val liveViewBuffer by lazy { ByteArray(bulkIn.maxPacketSize.coerceAtLeast(16384)) }
+
+    /**
      * Polls the Interrupt IN endpoint for incoming PTP event (e.g. ObjectAdded or Sony ObjectReady).
      */
     fun pollEvent(timeoutMs: Int = 200): Pair<Int, Int?>? {
         val ep = interruptIn ?: return null
-        val buffer = ByteArray(ep.maxPacketSize)
+        val buffer = interruptBuffer ?: return null
         val read = connection.bulkTransfer(ep, buffer, buffer.size, timeoutMs)
         if (read >= PtpPacket.HEADER_SIZE) {
             val header = PtpPacket.parseHeader(buffer)
@@ -295,8 +318,7 @@ class SonyPtpDriver(
             return false
         }
 
-        val maxPacket = bulkIn.maxPacketSize.coerceAtLeast(16384)
-        val buffer = ByteArray(maxPacket)
+        val buffer = ByteArray(32768)
 
         // Read initial data container header
         val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 10000)
@@ -404,8 +426,7 @@ class SonyPtpDriver(
             return null
         }
 
-        val maxPacket = bulkIn.maxPacketSize.coerceAtLeast(16384)
-        val buffer = ByteArray(maxPacket)
+        val buffer = liveViewBuffer
 
         // Read initial data container header with safe 2500ms timeout
         val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 2500)
@@ -595,8 +616,7 @@ class SonyPtpDriver(
     }
 
     private fun receiveData(): ByteArray? {
-        val maxPacket = bulkIn.maxPacketSize.coerceAtLeast(16384)
-        val buffer = ByteArray(maxPacket)
+        val buffer = ByteArray(32768)
         val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 5000)
         if (read < PtpPacket.HEADER_SIZE) return null
 
@@ -614,7 +634,8 @@ class SonyPtpDriver(
         while (bos.size() < totalDataLen) {
             val chunk = connection.bulkTransfer(bulkIn, buffer, buffer.size, 5000)
             if (chunk <= 0) break
-            bos.write(buffer, 0, chunk)
+            val toWrite = minOf(chunk, totalDataLen - bos.size())
+            bos.write(buffer, 0, toWrite)
         }
         return bos.toByteArray()
     }
@@ -632,16 +653,29 @@ class SonyPtpDriver(
         if (header.type == SonyPtpConstants.PTP_CONTAINER_DATA) {
             val totalDataLen = (header.length - PtpPacket.HEADER_SIZE).toInt()
             var bytesRead = read - PtpPacket.HEADER_SIZE
-            while (bytesRead < totalDataLen) {
-                val toRead = minOf(buffer.size, totalDataLen - bytesRead)
-                val chunk = connection.bulkTransfer(bulkIn, buffer, toRead, timeoutMs)
-                if (chunk <= 0) break
-                bytesRead += chunk
+            var responseAlreadyConsumed = false
+            val surplusFirst = bytesRead - totalDataLen
+            if (surplusFirst >= PtpPacket.HEADER_SIZE) {
+                responseAlreadyConsumed = true
             }
-            // Read trailing response container
-            val respRead = connection.bulkTransfer(bulkIn, buffer, buffer.size, timeoutMs)
-            if (respRead >= PtpPacket.HEADER_SIZE) {
-                header = PtpPacket.parseHeader(buffer)
+
+            while (bytesRead < totalDataLen) {
+                // ALWAYS read full buffer.size to avoid USB babble/stalls
+                val chunk = connection.bulkTransfer(bulkIn, buffer, buffer.size, timeoutMs)
+                if (chunk <= 0) break
+                val toConsume = minOf(chunk, totalDataLen - bytesRead)
+                bytesRead += toConsume
+                val surplus = chunk - toConsume
+                if (surplus >= PtpPacket.HEADER_SIZE) {
+                    responseAlreadyConsumed = true
+                }
+            }
+            // Read trailing response container if not already bundled
+            if (!responseAlreadyConsumed) {
+                val respRead = connection.bulkTransfer(bulkIn, buffer, buffer.size, timeoutMs)
+                if (respRead >= PtpPacket.HEADER_SIZE) {
+                    header = PtpPacket.parseHeader(buffer)
+                }
             }
         }
         return header
