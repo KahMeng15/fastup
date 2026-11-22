@@ -16,8 +16,8 @@ enum class UploadFormat(val label: String) {
 }
 
 enum class CameraCaptureFormat(val label: String) {
-    RAW_AND_JPEG("RAW + JPEG"),
-    JPEG_ONLY("JPEG only"),
+    JPEG_ONLY("JPEG only (Recommended)"),
+    RAW_AND_JPEG("RAW + JPEG (Both over USB)"),
     RAW_ONLY("RAW only")
 }
 

@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Key
@@ -257,7 +258,71 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
-        // Camera Shooting Format Card
+        // Sony Camera Tethering Guide Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Slate800.copy(alpha = 0.85f)),
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Blue500.copy(alpha = 0.4f))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CameraAlt,
+                        contentDescription = null,
+                        tint = Blue400,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "Sony Camera Tethering Setup",
+                        color = Slate100,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                }
+
+                Text(
+                    text = "For instant transfer (~200ms) with zero camera buffer delay:",
+                    color = Slate300,
+                    fontSize = 13.sp
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Slate900.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "1. Camera Quality: RAW + JPEG (SD card keeps full RAW)",
+                        color = Slate200,
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        text = "2. PC Remote Settings:\n   • Still Img. Save Dest. → PC+Camera\n   • RAW+J PC Save Img → JPEG Only",
+                        color = Slate200,
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        text = "3. FastUp Setting: Use \"JPEG only\" below",
+                        color = Blue400,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+
+        // Camera USB Transfer Format Card
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Slate800),
@@ -270,13 +335,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "Camera Shooting Format",
+                    text = "Camera USB Transfer Format",
                     color = Slate100,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 16.sp
                 )
                 Text(
-                    text = "Select what your camera is set to shoot (RAW+JPEG drains both files over USB without hanging the camera)",
+                    text = "Matches your camera's \"RAW+J PC Save Img\" setting. Use \"JPEG only\" for fast transfers without buffer lag.",
                     color = Slate400,
                     fontSize = 12.sp
                 )
