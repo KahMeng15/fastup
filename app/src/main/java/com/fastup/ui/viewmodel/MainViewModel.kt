@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.fastup.FastUpApp
 import com.fastup.model.CameraConnectionState
 import com.fastup.model.PhotoItem
+import com.fastup.model.ServerConnectionState
 import com.fastup.model.ShareSessionInfo
 import com.fastup.model.UploadFormat
 import com.fastup.model.UploadStatus
@@ -42,6 +43,7 @@ class MainViewModel : ViewModel() {
     val isUploading: StateFlow<Boolean> = uploadManager.isUploading
     val isUploadPaused: StateFlow<Boolean> = uploadManager.isUploadPaused
     val shareSession: StateFlow<ShareSessionInfo?> = uploadManager.shareSession
+    val serverConnectionState: StateFlow<ServerConnectionState> = uploadManager.serverConnectionState
 
     private val _cameraState = MutableStateFlow(CameraConnectionState.DISCONNECTED)
     val cameraState: StateFlow<CameraConnectionState> = _cameraState.asStateFlow()
@@ -63,6 +65,7 @@ class MainViewModel : ViewModel() {
     }
 
     init {
+        checkServerConnection()
         checkServerStorage()
         uploadManager.refreshLocalFolders()
     }
@@ -149,6 +152,28 @@ class MainViewModel : ViewModel() {
             uploadManager.wifiOnly = value
         }
 
+    private val _liveViewerMode = MutableStateFlow(uploadManager.liveViewerMode)
+    val liveViewerMode: StateFlow<com.fastup.model.LiveViewerMode> = _liveViewerMode.asStateFlow()
+
+    fun setLiveViewerMode(mode: com.fastup.model.LiveViewerMode) {
+        uploadManager.liveViewerMode = mode
+        _liveViewerMode.value = mode
+    }
+
+    private val _liveViewFrame = MutableStateFlow<ByteArray?>(null)
+    val liveViewFrame: StateFlow<ByteArray?> = _liveViewFrame.asStateFlow()
+
+    private val _isLiveViewStreaming = MutableStateFlow(false)
+    val isLiveViewStreaming: StateFlow<Boolean> = _isLiveViewStreaming.asStateFlow()
+
+    fun startLiveView() {
+        usbCameraManager?.startLiveView()
+    }
+
+    fun stopLiveView() {
+        usbCameraManager?.stopLiveView()
+    }
+
     val dashboardStats: StateFlow<DashboardStats> = uploadManager.photos.map { list ->
         val total = list.size
         val pending = list.count { it.status == UploadStatus.PENDING || it.status == UploadStatus.UPLOADING }
@@ -195,6 +220,16 @@ class MainViewModel : ViewModel() {
             val res = uploadManager.apiClient.fetchServerStorageAvailable()
             res.onSuccess { avail ->
                 _serverAvailableStorage.value = avail
+            }.onFailure {
+                _serverAvailableStorage.value = "--"
+            }
+        }
+    }
+
+    fun checkServerConnection() {
+        uploadManager.checkServerConnection { success ->
+            if (success) {
+                checkServerStorage()
             }
         }
     }
@@ -224,6 +259,16 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             manager.deviceTransferStats.collect { stats ->
                 _deviceTransferStats.value = stats
+            }
+        }
+        viewModelScope.launch {
+            manager.liveViewFrame.collect { frame ->
+                _liveViewFrame.value = frame
+            }
+        }
+        viewModelScope.launch {
+            manager.isLiveViewStreaming.collect { isStreaming ->
+                _isLiveViewStreaming.value = isStreaming
             }
         }
     }

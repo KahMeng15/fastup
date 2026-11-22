@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
 import com.fastup.model.PhotoItem
+import com.fastup.model.ServerConnectionState
 import com.fastup.model.ShareSessionInfo
 import com.fastup.model.UploadFormat
 import com.fastup.model.UploadStatus
@@ -44,6 +45,7 @@ class UploadManager(private val context: Context) {
             field = value
             apiClient.baseUrl = value
             prefs.edit().putString(PREF_SERVER_URL, value).apply()
+            checkServerConnection()
         }
 
     var apiKey: String = prefs.getString(PREF_API_KEY, "fastup_secret_key") ?: "fastup_secret_key"
@@ -105,6 +107,19 @@ class UploadManager(private val context: Context) {
             prefs.edit().putBoolean(PREF_WIFI_ONLY, value).apply()
         }
 
+    var liveViewerMode: com.fastup.model.LiveViewerMode = try {
+        com.fastup.model.LiveViewerMode.valueOf(
+            prefs.getString(PREF_LIVE_VIEWER_MODE, com.fastup.model.LiveViewerMode.INSTANT_CAPTURE.name)
+                ?: com.fastup.model.LiveViewerMode.INSTANT_CAPTURE.name
+        )
+    } catch (_: Exception) {
+        com.fastup.model.LiveViewerMode.INSTANT_CAPTURE
+    }
+        set(value) {
+            field = value
+            prefs.edit().putString(PREF_LIVE_VIEWER_MODE, value.name).apply()
+        }
+
     private val _isUploadPaused = MutableStateFlow(prefs.getBoolean(PREF_UPLOAD_PAUSED, false))
     val isUploadPaused: StateFlow<Boolean> = _isUploadPaused.asStateFlow()
 
@@ -121,6 +136,9 @@ class UploadManager(private val context: Context) {
     private val _shareSession = MutableStateFlow<ShareSessionInfo?>(null)
     val shareSession: StateFlow<ShareSessionInfo?> = _shareSession.asStateFlow()
 
+    private val _serverConnectionState = MutableStateFlow(ServerConnectionState.DISCONNECTED)
+    val serverConnectionState: StateFlow<ServerConnectionState> = _serverConnectionState.asStateFlow()
+
     private val _localFolders = MutableStateFlow<List<LocalFolderInfo>>(emptyList())
     val localFolders: StateFlow<List<LocalFolderInfo>> = _localFolders.asStateFlow()
 
@@ -131,7 +149,22 @@ class UploadManager(private val context: Context) {
         scanExistingCaptures()
         refreshLocalFolders()
         syncUploadedFilesWithServer()
+        checkServerConnection()
         startWorker()
+    }
+
+    fun checkServerConnection(onResult: ((Boolean) -> Unit)? = null) {
+        scope.launch {
+            _serverConnectionState.value = ServerConnectionState.CONNECTING
+            val res = apiClient.checkConnection()
+            res.onSuccess {
+                _serverConnectionState.value = ServerConnectionState.CONNECTED
+                onResult?.invoke(true)
+            }.onFailure {
+                _serverConnectionState.value = ServerConnectionState.DISCONNECTED
+                onResult?.invoke(false)
+            }
+        }
     }
 
     fun syncUploadedFilesWithServer() {
@@ -481,6 +514,7 @@ class UploadManager(private val context: Context) {
         }
 
         if (uploadFailed) {
+            _serverConnectionState.value = ServerConnectionState.ERROR
             Log.e(TAG, "Failed uploading ${currentPhoto.fileName}: $failureReason")
             _photos.update { list ->
                 list.map {
@@ -493,6 +527,7 @@ class UploadManager(private val context: Context) {
                 }
             }
         } else {
+            _serverConnectionState.value = ServerConnectionState.CONNECTED
             Log.i(TAG, "Successfully uploaded ${currentPhoto.fileName} (${filesToUpload.size} file(s))")
             val editor = uploadedPrefs.edit()
             editor.putBoolean(photoId, true)
@@ -715,5 +750,6 @@ class UploadManager(private val context: Context) {
         private const val PREF_WIFI_ONLY = "pref_wifi_only"
         private const val PREF_UPLOAD_PAUSED = "pref_upload_paused"
         private const val PREF_PHOTOGRAPHER_NAME = "pref_photographer_name"
+        private const val PREF_LIVE_VIEWER_MODE = "pref_live_viewer_mode"
     }
 }

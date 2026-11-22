@@ -21,11 +21,24 @@ enum class CameraCaptureFormat(val label: String) {
     RAW_ONLY("RAW only")
 }
 
+enum class LiveViewerMode(val label: String, val description: String) {
+    DISABLED("Standard Grid Only", "Default dashboard layout with full recent images grid."),
+    INSTANT_CAPTURE("Instant Capture Auto-Preview", "Automatically displays the latest capture in high quality right after shooting."),
+    LIVE_VIEWFINDER("Real-Time Viewfinder (Live View)", "Streams live sensor preview (~15 FPS) from Sony camera over USB.")
+}
+
 enum class CameraConnectionState {
     DISCONNECTED,
     CONNECTING,
     CONNECTED,
     CAPTURING,
+    ERROR
+}
+
+enum class ServerConnectionState {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED,
     ERROR
 }
 

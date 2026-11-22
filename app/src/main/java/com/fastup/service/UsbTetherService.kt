@@ -3,11 +3,14 @@ package com.fastup.service
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.fastup.FastUpApp
@@ -32,6 +35,7 @@ class UsbTetherService : Service() {
     private val binder = LocalBinder()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var usbCameraManager: UsbCameraManager
+    private var wakeLock: PowerManager.WakeLock? = null
 
     inner class LocalBinder : Binder() {
         fun getService(): UsbTetherService = this@UsbTetherService
@@ -58,6 +62,17 @@ class UsbTetherService : Service() {
             )
         } else {
             startForeground(NOTIFICATION_ID, buildNotification("Camera: Ready"))
+        }
+
+        // Acquire partial wake lock to keep USB PTP transfer and polling alive when screen turns off
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FastUp:UsbTetherWakeLock")?.apply {
+                setReferenceCounted(false)
+                acquire(12 * 60 * 60 * 1000L) // 12 hours timeout safety
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to acquire WakeLock: ${e.message}")
         }
 
         // 2. Initialize camera manager and scan for connected camera
@@ -140,10 +155,18 @@ class UsbTetherService : Service() {
     override fun onDestroy() {
         instance = null
         usbCameraManager.stop()
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error releasing wakeLock: ${e.message}")
+        }
         super.onDestroy()
     }
 
     companion object {
+        private const val TAG = "UsbTetherService"
         const val NOTIFICATION_ID = 1001
         var instance: UsbTetherService? = null
             private set

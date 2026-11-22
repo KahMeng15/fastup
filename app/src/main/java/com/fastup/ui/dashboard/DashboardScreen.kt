@@ -1,20 +1,18 @@
 package com.fastup.ui.dashboard
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
+import android.graphics.BitmapFactory
 import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -23,42 +21,65 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.fastup.model.CameraConnectionState
+import com.fastup.model.LiveViewerMode
+import com.fastup.model.PhotoItem
+import com.fastup.model.ServerConnectionState
+import com.fastup.ui.gallery.PhotoGridItem
 import com.fastup.ui.theme.*
 import com.fastup.ui.viewmodel.MainViewModel
-import com.fastup.util.QrCodeUtil
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DashboardScreen(viewModel: MainViewModel) {
+fun DashboardScreen(
+    viewModel: MainViewModel,
+    onPhotoClick: (String) -> Unit = {}
+) {
     val context = LocalContext.current
     val stats by viewModel.dashboardStats.collectAsState()
     val cameraState by viewModel.cameraState.collectAsState()
     val cameraModel by viewModel.cameraModel.collectAsState()
+    val serverState by viewModel.serverConnectionState.collectAsState()
     val deviceStats by viewModel.deviceTransferStats.collectAsState()
     val storageFacts by viewModel.storageFacts.collectAsState()
-    val shareSession by viewModel.shareSession.collectAsState()
     val isUploading by viewModel.isUploading.collectAsState()
     val isUploadPaused by viewModel.isUploadPaused.collectAsState()
-    val targetFolder by viewModel.currentSessionId.collectAsState()
+    val photos by viewModel.photos.collectAsState()
+    val liveViewerMode by viewModel.liveViewerMode.collectAsState()
+    val liveViewFrame by viewModel.liveViewFrame.collectAsState()
+    val isLiveViewStreaming by viewModel.isLiveViewStreaming.collectAsState()
 
-    var showFolderDialog by remember { mutableStateOf(false) }
-    var sessionNameInput by remember(targetFolder) { mutableStateOf(targetFolder) }
-    var isGeneratingShare by remember { mutableStateOf(false) }
+    // Manage Live View streaming lifecycle based on mode
+    DisposableEffect(liveViewerMode, cameraState) {
+        if (liveViewerMode == LiveViewerMode.LIVE_VIEWFINDER && cameraState == CameraConnectionState.CONNECTED) {
+            viewModel.startLiveView()
+        } else {
+            viewModel.stopLiveView()
+        }
+        onDispose {
+            if (liveViewerMode == LiveViewerMode.LIVE_VIEWFINDER) {
+                viewModel.stopLiveView()
+            }
+        }
+    }
+
+    val latestPhoto = photos.firstOrNull()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(PureBlack)
-            .padding(12.dp)
-            .verticalScroll(rememberScrollState()),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         // App Header
@@ -73,125 +94,50 @@ fun DashboardScreen(viewModel: MainViewModel) {
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
             )
-            // Camera Status Badge
-            CameraBadge(cameraState = cameraState, model = cameraModel)
-        }
-
-        // Camera Tether Card (Fixed height to prevent resizing)
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(64.dp),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, DarkBorder)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .background(
-                            when (cameraState) {
-                                CameraConnectionState.CONNECTED -> Emerald500.copy(alpha = 0.2f)
-                                CameraConnectionState.CAPTURING -> Amber500.copy(alpha = 0.2f)
-                                CameraConnectionState.CONNECTING -> Blue500.copy(alpha = 0.2f)
-                                else -> Slate700
-                            },
-                            shape = CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
+            if (liveViewerMode != LiveViewerMode.DISABLED) {
+                Surface(
+                    color = Blue500.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Blue500.copy(alpha = 0.3f))
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.CameraAlt,
-                        contentDescription = "Camera",
-                        tint = when (cameraState) {
-                            CameraConnectionState.CONNECTED -> Emerald500
-                            CameraConnectionState.CAPTURING -> Amber500
-                            CameraConnectionState.CONNECTING -> Blue500
-                            else -> Slate400
-                        },
-                        modifier = Modifier.size(17.dp)
-                    )
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = when (cameraState) {
-                            CameraConnectionState.CONNECTED -> "Camera Connected & Ready"
-                            CameraConnectionState.CAPTURING -> "Receiving Capture via USB..."
-                            CameraConnectionState.CONNECTING -> "Handshaking with Camera..."
-                            CameraConnectionState.DISCONNECTED -> "Connect Camera via USB-C"
-                            CameraConnectionState.ERROR -> "USB Tether Error"
-                        },
-                        color = Slate100,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        text = if (liveViewerMode == LiveViewerMode.LIVE_VIEWFINDER) "LIVE VIEW" else "AUTO PREVIEW",
+                        color = Blue400,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                     )
-                    Text(
-                        text = if (cameraState == CameraConnectionState.CONNECTED)
-                            "Physical shutter enabled (PC Remote mode)"
-                        else "Ensure camera USB mode is set to 'PC Remote'",
-                        color = Slate400,
-                        fontSize = 10.5.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Box(
-                    modifier = Modifier.width(88.dp),
-                    contentAlignment = Alignment.CenterEnd
-                ) {
-                    if (cameraState != CameraConnectionState.CONNECTED) {
-                        FilledTonalButton(
-                            onClick = { viewModel.reconnectCamera() },
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = Slate700,
-                                contentColor = Slate100
-                            ),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(28.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Scan",
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text("Connect", fontSize = 10.5.sp)
-                        }
-                    } else {
-                        Surface(
-                            color = Emerald500.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(5.dp)
-                                        .background(Emerald500, CircleShape)
-                                )
-                                Text("Ready", color = Emerald500, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
                 }
             }
         }
 
         // Side-by-Side: Local Transfer & Upload Pipeline Cards
+        val (cameraStatusText, cameraStatusColor) = when (cameraState) {
+            CameraConnectionState.CONNECTED -> Pair("Ready", Emerald500)
+            CameraConnectionState.CAPTURING -> Pair("Capturing", Amber500)
+            CameraConnectionState.CONNECTING -> Pair("Connecting", Blue500)
+            CameraConnectionState.DISCONNECTED -> Pair("Offline", Slate400)
+            CameraConnectionState.ERROR -> Pair("Error", Rose500)
+        }
+        val cameraDetail = if (cameraState == CameraConnectionState.CONNECTED) {
+            cameraModel.removePrefix("Sony ").ifBlank { "A7 III" }
+        } else "--"
+
+        val (serverStatusText, serverStatusColor) = when (serverState) {
+            ServerConnectionState.CONNECTED -> Pair("Online", Emerald500)
+            ServerConnectionState.CONNECTING -> Pair("Connecting", Blue500)
+            ServerConnectionState.DISCONNECTED -> Pair("Offline", Slate400)
+            ServerConnectionState.ERROR -> Pair("Error", Rose500)
+        }
+        val serverHostDisplay = remember(viewModel.serverUrl) {
+            try {
+                val clean = viewModel.serverUrl.substringAfter("://").substringBefore(":").substringBefore("/")
+                if (clean.length > 13) clean.take(11) + ".." else clean
+            } catch (_: Exception) {
+                "Server"
+            }
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -200,6 +146,12 @@ fun DashboardScreen(viewModel: MainViewModel) {
                 TransferPipelineCard(
                     title = "Local Transfer",
                     icon = Icons.Default.Download,
+                    statusText = cameraStatusText,
+                    statusColor = cameraStatusColor,
+                    onStatusClick = {
+                        viewModel.reconnectCamera()
+                        Toast.makeText(context, "Scanning for camera...", Toast.LENGTH_SHORT).show()
+                    },
                     speedFormatted = deviceStats.speedFormatted,
                     isActive = deviceStats.speedBps > 0L,
                     progress = deviceStats.overallProgress,
@@ -207,6 +159,8 @@ fun DashboardScreen(viewModel: MainViewModel) {
                     counter2 = Pair("Pending", deviceStats.pendingTransfer.toString()),
                     counter3 = Pair("Done", deviceStats.completedTransfer.toString()),
                     counter4 = Pair("Failed", deviceStats.failedTransfer.toString()),
+                    detailLabel = "Camera",
+                    detailValue = cameraDetail,
                     fact1 = Pair("Used", storageFacts.localUsedFormatted),
                     fact2 = Pair("Free", storageFacts.localFreeFormatted)
                 )
@@ -216,6 +170,12 @@ fun DashboardScreen(viewModel: MainViewModel) {
                     title = "Upload Pipeline",
                     icon = Icons.Default.CloudUpload,
                     badge = if (isUploadPaused) "PAUSED" else null,
+                    statusText = serverStatusText,
+                    statusColor = serverStatusColor,
+                    onStatusClick = {
+                        viewModel.checkServerConnection()
+                        Toast.makeText(context, "Checking server connection...", Toast.LENGTH_SHORT).show()
+                    },
                     speedFormatted = stats.speedFormatted,
                     isActive = isUploading,
                     progress = stats.overallProgress,
@@ -223,6 +183,8 @@ fun DashboardScreen(viewModel: MainViewModel) {
                     counter2 = Pair("Pending", stats.pendingCount.toString()),
                     counter3 = Pair("Uploaded", stats.completedCount.toString()),
                     counter4 = Pair("Failed", stats.failedCount.toString()),
+                    detailLabel = "Host",
+                    detailValue = serverHostDisplay,
                     fact1 = Pair("Up", storageFacts.uploadedSizeFormatted),
                     fact2 = Pair("Free", storageFacts.serverAvailableFormatted),
                     onFailedClick = if (stats.failedCount > 0) { { viewModel.retryFailed() } } else null
@@ -230,199 +192,265 @@ fun DashboardScreen(viewModel: MainViewModel) {
             }
         }
 
-        // Target Server Folder Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, DarkBorder)
-        ) {
-            Column(
+        // Dedicated Live Viewer Section (if enabled)
+        if (liveViewerMode == LiveViewerMode.INSTANT_CAPTURE && latestPhoto != null) {
+            Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .aspectRatio(3f / 2f),
+                colors = CardDefaults.cardColors(containerColor = Color.Black),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, DarkBorder)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Staging Destination",
-                        color = Slate100,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 16.sp
-                    )
-                    IconButton(onClick = { showFolderDialog = true }) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = "Browse folders", tint = Blue500)
-                    }
-                }
-
-                Row(
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .background(PureBlack, RoundedCornerShape(10.dp))
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .clickable { onPhotoClick(latestPhoto.id) },
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.Folder, contentDescription = null, tint = Amber500, modifier = Modifier.size(24.dp))
-                    Column(modifier = Modifier.weight(1f)) {
+                    AsyncImage(
+                        model = latestPhoto.displayFile,
+                        contentDescription = "Latest Photo Preview",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Top Bar Overlay
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopCenter)
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .background(Emerald500, CircleShape)
+                            )
+                            Text(
+                                text = "LATEST CAPTURE: ${latestPhoto.fileName}",
+                                color = Slate100,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
                         Text(
-                            text = "Target Folder on Server:",
-                            color = Slate400,
-                            fontSize = 11.sp
-                        )
-                        Text(
-                            text = targetFolder,
-                            color = Slate100,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 14.sp
+                            text = "Tap to inspect",
+                            color = Slate300,
+                            fontSize = 10.sp
                         )
                     }
                 }
+            }
+        } else if (liveViewerMode == LiveViewerMode.LIVE_VIEWFINDER) {
+            val frameBitmap = remember(liveViewFrame) {
+                liveViewFrame?.let { bytes ->
+                    try {
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }
+            val liveViewAspect = if (frameBitmap != null && frameBitmap.height > 0) {
+                frameBitmap.width.toFloat() / frameBitmap.height.toFloat()
+            } else {
+                3f / 2f
+            }
 
-                Button(
-                    onClick = { showFolderDialog = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = Blue600),
-                    modifier = Modifier.fillMaxWidth()
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(liveViewAspect),
+                colors = CardDefaults.cardColors(containerColor = Color.Black),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, if (isLiveViewStreaming) Emerald500.copy(alpha = 0.5f) else DarkBorder)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Select / Create Server Folder")
+                    if (frameBitmap != null) {
+                        Image(
+                            bitmap = frameBitmap,
+                            contentDescription = "Live View Stream",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            if (cameraState == CameraConnectionState.CONNECTED) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = Blue400,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Connecting to camera live viewfinder stream...",
+                                    color = Slate300,
+                                    fontSize = 12.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.VideocamOff,
+                                    contentDescription = null,
+                                    tint = Slate500,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Connect camera via USB-C to view live stream",
+                                    color = Slate400,
+                                    fontSize = 12.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+
+                    // Live Stream Header Overlay
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopCenter)
+                            .background(Color.Black.copy(alpha = 0.65f))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .background(if (isLiveViewStreaming) Emerald500 else Rose500, CircleShape)
+                            )
+                            Text(
+                                text = if (isLiveViewStreaming) "LIVE VIEWFINDER (SENSOR)" else "VIEWFINDER PAUSED",
+                                color = Slate100,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        if (cameraState == CameraConnectionState.CONNECTED) {
+                            FilledTonalButton(
+                                onClick = {
+                                    if (isLiveViewStreaming) viewModel.stopLiveView() else viewModel.startLiveView()
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.height(24.dp),
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = if (isLiveViewStreaming) Slate700 else Blue600,
+                                    contentColor = Slate100
+                                )
+                            ) {
+                                Text(
+                                    text = if (isLiveViewStreaming) "Pause" else "Resume",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // Folder Selection Modal Dialog
-        if (showFolderDialog) {
-            ServerFolderDialog(
-                viewModel = viewModel,
-                onDismiss = { showFolderDialog = false }
-            )
-        }
-
-        // Session & On-Demand Share Link Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, DarkBorder)
+        // Recent Images Grid Section filling remaining free space
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Event Session & Guest Share",
+                    text = "Recent Captures",
                     color = Slate100,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp
+                    fontSize = 15.sp
                 )
-
-                OutlinedTextField(
-                    value = sessionNameInput,
-                    onValueChange = {
-                        sessionNameInput = it
-                        viewModel.sessionId = it
-                    },
-                    label = { Text("Session Name / Event ID", color = Slate400) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Slate100,
-                        unfocusedTextColor = Slate100,
-                        focusedBorderColor = Blue500,
-                        unfocusedBorderColor = Slate600
-                    ),
-                    singleLine = true
+                Text(
+                    text = "${photos.size} total",
+                    color = Slate400,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
                 )
+            }
 
-                Button(
-                    onClick = {
-                        isGeneratingShare = true
-                        viewModel.generateShareLink { result ->
-                            isGeneratingShare = false
-                            result.onFailure {
-                                Toast.makeText(context, "Error: ${it.message}", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    },
-                    enabled = !isGeneratingShare,
-                    colors = ButtonDefaults.buttonColors(containerColor = Blue600),
-                    modifier = Modifier.fillMaxWidth()
+            if (photos.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(DarkSurface, RoundedCornerShape(12.dp))
+                        .border(1.dp, DarkBorder, RoundedCornerShape(12.dp))
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    if (isGeneratingShare) {
-                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
-                    } else {
-                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Generate Instant Share Link")
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = null,
+                            tint = Slate600,
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Text(
+                            text = "No photos captured yet",
+                            color = Slate400,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "Photos captured via USB tethering will appear here instantly.",
+                            color = Slate500,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
-
-                // Share link display with QR code
-                AnimatedVisibility(visible = shareSession != null) {
-                    shareSession?.let { session ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(PureBlack, RoundedCornerShape(12.dp))
-                                .padding(12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Text(
-                                text = "Guest Live Gallery URL",
-                                color = Slate400,
-                                fontSize = 12.sp
-                            )
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = session.shareUrl,
-                                    color = Emerald500,
-                                    fontWeight = FontWeight.Medium,
-                                    fontSize = 13.sp,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                IconButton(onClick = {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    clipboard.setPrimaryClip(ClipData.newPlainText("Share Link", session.shareUrl))
-                                    Toast.makeText(context, "Copied share link to clipboard!", Toast.LENGTH_SHORT).show()
-                                }) {
-                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Slate100)
-                                }
-                            }
-
-                            // Dynamic QR code preview
-                            val qrBitmap = remember(session.shareUrl) {
-                                QrCodeUtil.generateQrCodeBitmap(session.shareUrl, 400)
-                            }
-
-                            qrBitmap?.let { bitmap ->
-                                Box(
-                                    modifier = Modifier
-                                        .size(180.dp)
-                                        .background(Color.White, RoundedCornerShape(8.dp))
-                                        .padding(8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Image(
-                                        bitmap = bitmap,
-                                        contentDescription = "Share QR Code",
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                }
-                            }
-                        }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(photos, key = { it.id }) { photo ->
+                        PhotoGridItem(
+                            photo = photo,
+                            onClick = { onPhotoClick(photo.id) }
+                        )
                     }
                 }
             }
@@ -432,13 +460,16 @@ fun DashboardScreen(viewModel: MainViewModel) {
 
 /**
  * Shared, identical unified card design for Local Transfer & Upload Pipeline.
- * Fixed height (140.dp) ensures no resizing occurs when state changes.
+ * Fixed height (124.dp) ensures no resizing occurs when state changes.
  */
 @Composable
 fun TransferPipelineCard(
     title: String,
     icon: ImageVector,
     badge: String? = null,
+    statusText: String,
+    statusColor: Color,
+    onStatusClick: (() -> Unit)? = null,
     speedFormatted: String,
     isActive: Boolean,
     progress: Float,
@@ -446,6 +477,8 @@ fun TransferPipelineCard(
     counter2: Pair<String, String>, // Pending
     counter3: Pair<String, String>, // Transferred or Uploaded
     counter4: Pair<String, String>, // Failed
+    detailLabel: String,            // Camera or Server
+    detailValue: String,            // model or host
     fact1: Pair<String, String>,    // e.g. Storage Used
     fact2: Pair<String, String>,    // e.g. Storage Free
     onFailedClick: (() -> Unit)? = null
@@ -453,7 +486,7 @@ fun TransferPipelineCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(120.dp),
+            .height(124.dp),
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
         shape = RoundedCornerShape(10.dp),
         border = BorderStroke(1.dp, DarkBorder)
@@ -461,7 +494,7 @@ fun TransferPipelineCard(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp, vertical = 7.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             // Header Row: Title & Speed
@@ -526,9 +559,9 @@ fun TransferPipelineCard(
                 trackColor = Slate700
             )
 
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(1.dp))
 
-            // 1 Row, 2 Columns: Col 1 for ALL Counters in ONE column, Col 2 for Facts & Data
+            // 1 Row, 2 Columns: Col 1 for ALL Counters in ONE column, Col 2 for Status, Details & Storage Facts
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -536,7 +569,7 @@ fun TransferPipelineCard(
             ) {
                 // Col 1: Counters (All 4 in ONE single vertical column)
                 Column(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(0.85f),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     CounterRow(label = counter1.first, value = counter1.second, color = Slate300)
@@ -554,19 +587,77 @@ fun TransferPipelineCard(
                 Box(
                     modifier = Modifier
                         .width(1.dp)
-                        .height(52.dp)
+                        .height(54.dp)
                         .background(DarkBorder)
                 )
 
-                // Col 2: Facts & Data (Used and Free in the other column)
+                // Col 2: Status, Details & Storage Facts (4 rows matching Col 1)
                 Column(
-                    modifier = Modifier.weight(1.05f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.weight(1.15f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
+                    StatusDataRow(
+                        label = "Status",
+                        statusText = statusText,
+                        dotColor = statusColor,
+                        onClick = onStatusClick
+                    )
+                    FactDataRow(label = detailLabel, value = detailValue)
                     FactDataRow(label = fact1.first, value = fact1.second)
                     FactDataRow(label = fact2.first, value = fact2.second)
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun StatusDataRow(
+    label: String,
+    statusText: String,
+    dotColor: Color,
+    onClick: (() -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .clip(RoundedCornerShape(3.dp))
+                        .clickable(onClick = onClick)
+                } else Modifier
+            ),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = Slate400,
+            fontSize = 9.sp,
+            lineHeight = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(5.dp)
+                    .background(dotColor, CircleShape)
+            )
+            Text(
+                text = statusText,
+                color = dotColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 9.sp,
+                lineHeight = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

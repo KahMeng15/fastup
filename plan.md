@@ -227,7 +227,7 @@ If the USB tests succeed, this is the architecture I recommend.
 - [x] Implemented `UploadManager` with real-time transfer speed (kB/s or MB/s), queue counters, retry logic, network policies (Wi-Fi only vs Cellular), and upload mode toggle (**RAW only**, **JPEG only**, **RAW + JPEG**).
 - [x] Built `ApiClient` for `hellomyphotos` staging API with on-demand ZXing QR code rendering.
 - [x] Developed Jetpack Compose UI:
-  - **Dashboard**: Camera connection badge, upload speed meter, queue counts, session config, and "Generate Share Link" with QR code.
+  - **Dashboard**: Unified twin pipeline card layout (Local Transfer with Camera connection status & Sony model; Upload Pipeline with Server connectivity & host probe; real-time speed in kB/s or MB/s; storage used & free stats; session config and QR share generation).
   - **Gallery**: 3-column media grid with format chips, upload status badges, and zoomable detail view with full EXIF sheet.
   - **Settings**: Upload format picker, backend URL, auto-upload toggle, and server cleanup trigger.
 - [x] Compiled APK (`app/build/outputs/apk/debug/app-debug.apk`), deployed directly to the connected Samsung Galaxy A52s, launched and verified on-screen.

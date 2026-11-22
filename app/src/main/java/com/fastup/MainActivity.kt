@@ -201,7 +201,12 @@ fun MainAppScaffold(viewModel: MainViewModel) {
             modifier = Modifier.padding(innerPadding)
         ) {
             composable(Screen.Dashboard.route) {
-                DashboardScreen(viewModel = viewModel)
+                DashboardScreen(
+                    viewModel = viewModel,
+                    onPhotoClick = { photoId ->
+                        navController.navigate(Screen.Detail.createRoute(photoId))
+                    }
+                )
             }
             composable(Screen.Gallery.route) {
                 GalleryScreen(

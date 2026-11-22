@@ -1,33 +1,35 @@
 package com.fastup.ui.settings
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fastup.model.UploadFormat
+import com.fastup.ui.dashboard.ServerFolderDialog
 import com.fastup.ui.theme.*
 import com.fastup.ui.viewmodel.MainViewModel
+import com.fastup.util.QrCodeUtil
 
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
@@ -36,10 +38,18 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val isUploading by viewModel.isUploading.collectAsState()
     val localFolders by viewModel.localFolders.collectAsState()
     val photographerName by viewModel.photographerName.collectAsState()
+    val targetFolder by viewModel.currentSessionId.collectAsState()
+    val shareSession by viewModel.shareSession.collectAsState()
+    val currentViewerMode by viewModel.liveViewerMode.collectAsState()
+
+    var selectedViewerMode by remember(currentViewerMode) { mutableStateOf(currentViewerMode) }
     var selectedFolderId by remember { mutableStateOf<String?>(null) }
     var folderDropdownExpanded by remember { mutableStateOf(false) }
     var showClearDialog by remember { mutableStateOf(false) }
     var showPairDialog by remember { mutableStateOf(false) }
+    var showFolderDialog by remember { mutableStateOf(false) }
+    var sessionNameInput by remember(targetFolder) { mutableStateOf(targetFolder) }
+    var isGeneratingShare by remember { mutableStateOf(false) }
     var pairOtpCode by remember { mutableStateOf("") }
     var pairServerUrl by remember { mutableStateOf(viewModel.serverUrl) }
     var isPairing by remember { mutableStateOf(false) }
@@ -171,6 +181,256 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Enter 6-Digit Code")
+                    }
+                }
+            }
+        }
+
+        // Target Server Folder Card (Staging Destination)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Slate800),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Slate700)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Staging Destination",
+                        color = Slate100,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp
+                    )
+                    IconButton(onClick = { showFolderDialog = true }) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = "Browse folders", tint = Blue500)
+                    }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Slate900, RoundedCornerShape(10.dp))
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(Icons.Default.Folder, contentDescription = null, tint = Amber500, modifier = Modifier.size(24.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Target Folder on Server:",
+                            color = Slate400,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = targetFolder,
+                            color = Slate100,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = { showFolderDialog = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = Blue600),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Select / Create Server Folder")
+                }
+            }
+        }
+
+        // Folder Selection Modal Dialog
+        if (showFolderDialog) {
+            ServerFolderDialog(
+                viewModel = viewModel,
+                onDismiss = { showFolderDialog = false }
+            )
+        }
+
+        // Session & On-Demand Share Link Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Slate800),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Slate700)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Event Session & Guest Share",
+                    color = Slate100,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp
+                )
+
+                OutlinedTextField(
+                    value = sessionNameInput,
+                    onValueChange = {
+                        sessionNameInput = it
+                        viewModel.sessionId = it
+                    },
+                    label = { Text("Session Name / Event ID", color = Slate400) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Slate100,
+                        unfocusedTextColor = Slate100,
+                        focusedBorderColor = Blue500,
+                        unfocusedBorderColor = Slate600
+                    ),
+                    singleLine = true
+                )
+
+                Button(
+                    onClick = {
+                        isGeneratingShare = true
+                        viewModel.generateShareLink { result ->
+                            isGeneratingShare = false
+                            result.onFailure {
+                                Toast.makeText(context, "Error: ${it.message}", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    enabled = !isGeneratingShare,
+                    colors = ButtonDefaults.buttonColors(containerColor = Blue600),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    if (isGeneratingShare) {
+                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+                    } else {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Generate Instant Share Link")
+                    }
+                }
+
+                // Share link display with QR code
+                AnimatedVisibility(visible = shareSession != null) {
+                    shareSession?.let { session ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Slate900, RoundedCornerShape(12.dp))
+                                .padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "Guest Live Gallery URL",
+                                color = Slate400,
+                                fontSize = 12.sp
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = session.shareUrl,
+                                    color = Emerald500,
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("Share Link", session.shareUrl))
+                                    Toast.makeText(context, "Copied share link to clipboard!", Toast.LENGTH_SHORT).show()
+                                }) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Slate100)
+                                }
+                            }
+
+                            // Dynamic QR code preview
+                            val qrBitmap = remember(session.shareUrl) {
+                                QrCodeUtil.generateQrCodeBitmap(session.shareUrl, 400)
+                            }
+
+                            qrBitmap?.let { bitmap ->
+                                Box(
+                                    modifier = Modifier
+                                        .size(180.dp)
+                                        .background(Color.White, RoundedCornerShape(8.dp))
+                                        .padding(8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Image(
+                                        bitmap = bitmap,
+                                        contentDescription = "Share QR Code",
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Live Viewer / Preview Mode Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Slate800),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Slate700)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Dashboard Live Viewer Mode",
+                    color = Slate100,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp
+                )
+                Text(
+                    text = "Choose how photos and camera preview appear on your Dashboard screen.",
+                    color = Slate400,
+                    fontSize = 12.sp
+                )
+
+                com.fastup.model.LiveViewerMode.values().forEach { mode ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = selectedViewerMode == mode,
+                            onClick = {
+                                selectedViewerMode = mode
+                                viewModel.setLiveViewerMode(mode)
+                            },
+                            colors = RadioButtonDefaults.colors(selectedColor = Blue500)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(text = mode.label, color = Slate100, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text(text = mode.description, color = Slate400, fontSize = 11.5.sp)
+                        }
                     }
                 }
             }
@@ -319,6 +579,128 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         fontWeight = FontWeight.SemiBold
                     )
                 }
+            }
+        }
+
+        // Battery Saver / USB Power Management Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Slate800.copy(alpha = 0.9f)),
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Emerald500.copy(alpha = 0.4f))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BatteryChargingFull,
+                            contentDescription = null,
+                            tint = Emerald500,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "Phone Battery Saver & USB Power",
+                            color = Slate100,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                    }
+                    Surface(
+                        color = Emerald500.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = "RECOMMENDED",
+                            color = Emerald500,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Prevent the Sony camera from draining phone battery over the USB-C cable:",
+                    color = Slate300,
+                    fontSize = 13.sp
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Slate900.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .offset(y = 6.dp)
+                                .background(Emerald500, CircleShape)
+                        )
+                        Text(
+                            text = "Step 1: On your camera, press MENU.",
+                            color = Slate200,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .offset(y = 6.dp)
+                                .background(Emerald500, CircleShape)
+                        )
+                        Text(
+                            text = "Step 2: Go to Setup (yellow briefcase 💼) → Page 4/5.",
+                            color = Slate200,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .offset(y = 6.dp)
+                                .background(Emerald500, CircleShape)
+                        )
+                        Text(
+                            text = "Step 3: Set [USB Power Supply] to \"Off\".",
+                            color = Emerald400,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Text(
+                    text = "💡 With this setting Off, the camera runs exclusively on its own internal battery and will not draw charging current from your phone, preserving your phone's battery life throughout full event shoots.",
+                    color = Slate400,
+                    fontSize = 11.5.sp,
+                    lineHeight = 16.sp
+                )
             }
         }
 

@@ -43,6 +43,10 @@ class SonyPtpDriver(
      */
     fun openSession(): Boolean {
         try {
+            // Drain any residual bytes on bulkIn left over from previous process/session
+            val drainBuf = ByteArray(16384)
+            while (connection.bulkTransfer(bulkIn, drainBuf, drainBuf.size, 50) > 0) {}
+
             transactionId = 1
 
             // Per PTP standard ISO 15740: transactionId for OpenSession MUST be 0x00000000
@@ -174,65 +178,16 @@ class SonyPtpDriver(
     }
 
     /**
-     * Checks Sony property 0xD215 (ObjectInMemory).
-     * Returns true if an object is resident in camera RAM waiting for transfer (bit 15 set, value > 0x8000).
-     */
-    fun hasObjectInMemory(): Boolean {
-        return try {
-            val tid = nextTransactionId()
-            val cmd = PtpPacket.createCommand(
-                SonyPtpConstants.PTP_OP_GET_DEVICE_PROP_VALUE,
-                tid,
-                SonyPtpConstants.SONY_DPC_OBJECT_IN_MEMORY
-            )
-            if (!sendBulk(cmd)) return false
-
-            val maxPacket = bulkIn.maxPacketSize.coerceAtLeast(16384)
-            val buffer = ByteArray(maxPacket)
-            val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 1000)
-            if (read < PtpPacket.HEADER_SIZE) return false
-
-            val header = PtpPacket.parseHeader(buffer)
-            if (header.type != SonyPtpConstants.PTP_CONTAINER_DATA) {
-                Log.d(TAG, "hasObjectInMemory returned non-data container: type=${header.type}, code=0x${header.code.toString(16)}")
-                return false
-            }
-
-            val dataLen = header.length.toInt()
-            val payloadLen = dataLen - PtpPacket.HEADER_SIZE
-            val value = if (payloadLen >= 2 && read >= PtpPacket.HEADER_SIZE + 2) {
-                val bb = ByteBuffer.wrap(buffer, PtpPacket.HEADER_SIZE, 2).order(ByteOrder.LITTLE_ENDIAN)
-                bb.short.toInt() and 0xFFFF
-            } else 0
-
-            // If trailing response container wasn't already concatenated in this packet, consume it
-            if (read < dataLen + PtpPacket.HEADER_SIZE) {
-                readTransactionResponse(timeoutMs = 1000)
-            }
-
-            Log.d(TAG, "Sony ObjectInMemory (0xD215) value: 0x${value.toString(16)} ($value)")
-            (value > 0x8000) || (value and 0x8000 != 0)
-        } catch (e: Exception) {
-            Log.w(TAG, "Error checking hasObjectInMemory: ${e.message}")
-            false
-        }
-    }
-
-    /**
      * Retrieves filename and approximate size from ObjectInfo dataset.
      * Returns null if no object is ready or camera returned a permanent error.
-     *
-     * When the camera returns a direct 0x2001 response (object not yet ready —
-     * common for the RAW companion immediately after the JPEG is transferred),
-     * we back off and retry with a longer delay rather than giving up immediately.
      */
-    fun getObjectInfo(handle: Int, retries: Int = 6): Pair<String, Long>? {
+    fun getObjectInfo(handle: Int, retries: Int = 2): Pair<String, Long>? {
         for (attempt in 1..retries) {
             val tid = nextTransactionId()
             val cmd = PtpPacket.createCommand(SonyPtpConstants.PTP_OP_GET_OBJECT_INFO, tid, handle)
             if (!sendBulk(cmd)) {
                 if (attempt < retries) {
-                    try { Thread.sleep(200) } catch (ignored: InterruptedException) {}
+                    try { Thread.sleep(100) } catch (ignored: InterruptedException) {}
                     continue
                 }
                 return null
@@ -240,10 +195,10 @@ class SonyPtpDriver(
 
             val maxPacket = bulkIn.maxPacketSize.coerceAtLeast(16384)
             val buffer = ByteArray(maxPacket)
-            val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 2000)
+            val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 1500)
             if (read < PtpPacket.HEADER_SIZE) {
                 if (attempt < retries) {
-                    try { Thread.sleep(200) } catch (ignored: InterruptedException) {}
+                    try { Thread.sleep(100) } catch (ignored: InterruptedException) {}
                     continue
                 }
                 return null
@@ -252,9 +207,8 @@ class SonyPtpDriver(
             val header = PtpPacket.parseHeader(buffer)
             if (header.type == SonyPtpConstants.PTP_CONTAINER_RESPONSE) {
                 if (header.code == SonyPtpConstants.PTP_RESP_OK && attempt < retries) {
-                    // Camera said OK but sent no data: RAW companion not ready yet.
-                    // Back off and retry — the camera may need up to ~1s to stage the companion object.
-                    val backoff = if (attempt <= 2) 400L else 700L
+                    // Camera said OK but sent no data: RAW companion or next object not ready yet.
+                    val backoff = 150L
                     Log.d(TAG, "getObjectInfo(0x${handle.toString(16)}) attempt $attempt: not ready (0x2001), retrying in ${backoff}ms...")
                     try { Thread.sleep(backoff) } catch (ignored: InterruptedException) {}
                     continue
@@ -374,26 +328,39 @@ class SonyPtpDriver(
 
         var bytesReceived = 0L
 
+        var responseAlreadyConsumed = false
         FileOutputStream(destinationFile).use { fos ->
             val firstChunkPayload = read - PtpPacket.HEADER_SIZE
             if (firstChunkPayload > 0) {
-                fos.write(buffer, PtpPacket.HEADER_SIZE, firstChunkPayload)
-                bytesReceived += firstChunkPayload
+                val toWrite = if (knownTotal > 0) minOf(firstChunkPayload.toLong(), knownTotal).toInt() else firstChunkPayload
+                fos.write(buffer, PtpPacket.HEADER_SIZE, toWrite)
+                bytesReceived += toWrite
                 onProgress?.invoke(bytesReceived, knownTotal)
+
+                val surplus = firstChunkPayload - toWrite
+                if (surplus >= PtpPacket.HEADER_SIZE) {
+                    responseAlreadyConsumed = true
+                }
             }
 
             // If we know the exact target length > 0
             if (knownTotal > 0) {
                 while (bytesReceived < knownTotal) {
-                    val toRead = minOf(buffer.size.toLong(), knownTotal - bytesReceived).toInt()
-                    val chunkRead = connection.bulkTransfer(bulkIn, buffer, toRead, 10000)
+                    // ALWAYS read using full buffer.size (multiple of maxPacketSize) on bulkIn to avoid USB babble/stalls
+                    val chunkRead = connection.bulkTransfer(bulkIn, buffer, buffer.size, 10000)
                     if (chunkRead <= 0) {
                         Log.e(TAG, "USB transfer interrupted while downloading handle 0x${handle.toString(16)} ($bytesReceived / $knownTotal)")
                         break
                     }
-                    fos.write(buffer, 0, chunkRead)
-                    bytesReceived += chunkRead
+                    val toWrite = minOf(chunkRead.toLong(), knownTotal - bytesReceived).toInt()
+                    fos.write(buffer, 0, toWrite)
+                    bytesReceived += toWrite
                     onProgress?.invoke(bytesReceived, knownTotal)
+
+                    val surplus = chunkRead - toWrite
+                    if (surplus >= PtpPacket.HEADER_SIZE) {
+                        responseAlreadyConsumed = true
+                    }
                 }
             } else {
                 // Unknown total length: read until stream completes (packet smaller than buffer / max packet)
@@ -412,10 +379,152 @@ class SonyPtpDriver(
             fos.flush()
         }
 
-        // Consume trailing PTP Response packet
-        val resp = readTransactionResponse()
-        Log.i(TAG, "Completed object 0x${handle.toString(16)} download: $bytesReceived bytes, resp=0x${resp?.code?.toString(16)}")
+        // Consume trailing PTP Response packet if not already bundled with data
+        if (!responseAlreadyConsumed) {
+            val resp = readTransactionResponse()
+            Log.i(TAG, "Completed object 0x${handle.toString(16)} download: $bytesReceived bytes, resp=0x${resp?.code?.toString(16)}")
+        } else {
+            Log.i(TAG, "Completed object 0x${handle.toString(16)} download: $bytesReceived bytes (response in payload)")
+        }
         return bytesReceived > 0
+    }
+
+    @Volatile
+    var lastLiveViewResponseCode: Int = 0
+        private set
+
+    /**
+     * Fetches a single Live View JPEG frame from Sony virtual handle (0xFFFFC002).
+     * Decodes the proprietary Sony packet header to find the JPEG payload offset.
+     */
+    fun getLiveViewFrame(handle: Int = SonyPtpConstants.LIVEVIEW_OBJECT_HANDLE): ByteArray? {
+        val tid = nextTransactionId()
+        val cmd = PtpPacket.createCommand(SonyPtpConstants.PTP_OP_GET_OBJECT, tid, handle)
+        if (!sendBulk(cmd)) {
+            return null
+        }
+
+        val maxPacket = bulkIn.maxPacketSize.coerceAtLeast(16384)
+        val buffer = ByteArray(maxPacket)
+
+        // Read initial data container header with safe 2500ms timeout
+        val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 2500)
+        if (read < PtpPacket.HEADER_SIZE) {
+            // Bulk read timed out or failed: drain any arriving bytes so endpoint stays aligned
+            while (connection.bulkTransfer(bulkIn, buffer, buffer.size, 100) > 0) {}
+            return null
+        }
+
+        val header = PtpPacket.parseHeader(buffer)
+        if (header.type == SonyPtpConstants.PTP_CONTAINER_RESPONSE) {
+            lastLiveViewResponseCode = header.code
+            // Direct response (e.g. 0x200F AccessDenied or 0x2019 DeviceBusy when shutter is pressed)
+            return null
+        }
+
+        lastLiveViewResponseCode = 0
+
+        if (header.type != SonyPtpConstants.PTP_CONTAINER_DATA) {
+            readTransactionResponse(timeoutMs = 200)
+            return null
+        }
+
+        val totalDataLen = if (header.length > PtpPacket.HEADER_SIZE && header.length != 0xFFFFFFFFL) {
+            (header.length - PtpPacket.HEADER_SIZE).toInt()
+        } else -1
+
+        val bos = ByteArrayOutputStream(if (totalDataLen in 1..2000000) totalDataLen else 65536)
+        val firstChunk = read - PtpPacket.HEADER_SIZE
+        var responseAlreadyConsumed = false
+        if (firstChunk > 0) {
+            val toWrite = if (totalDataLen > 0) minOf(firstChunk, totalDataLen) else firstChunk
+            bos.write(buffer, PtpPacket.HEADER_SIZE, toWrite)
+            val surplus = firstChunk - toWrite
+            if (surplus >= PtpPacket.HEADER_SIZE) {
+                responseAlreadyConsumed = true
+            }
+        }
+
+        if (totalDataLen > 0) {
+            while (bos.size() < totalDataLen) {
+                // ALWAYS read using full buffer.size (multiple of maxPacketSize) to avoid babble/stalls
+                val chunk = connection.bulkTransfer(bulkIn, buffer, buffer.size, 1000)
+                if (chunk <= 0) break
+                val toWrite = minOf(chunk, totalDataLen - bos.size())
+                bos.write(buffer, 0, toWrite)
+
+                val surplus = chunk - toWrite
+                if (surplus >= PtpPacket.HEADER_SIZE) {
+                    responseAlreadyConsumed = true
+                }
+            }
+        } else {
+            while (true) {
+                val chunk = connection.bulkTransfer(bulkIn, buffer, buffer.size, 500)
+                if (chunk <= 0) break
+                bos.write(buffer, 0, chunk)
+                if (chunk < buffer.size) break
+            }
+        }
+
+        // Consume trailing response container if not already received
+        if (!responseAlreadyConsumed) {
+            readTransactionResponse(timeoutMs = 300)
+        }
+
+        val raw = bos.toByteArray()
+        if (raw.size < 8) return null
+
+        // Locate JPEG SOI marker (0xFF, 0xD8).
+        // On Sony Alpha, the first 4 bytes of the data payload specify the offset to the JPEG SOI (libgphoto2 #389).
+        var soiIndex = -1
+        val offset = (raw[0].toInt() and 0xFF) or
+                ((raw[1].toInt() and 0xFF) shl 8) or
+                ((raw[2].toInt() and 0xFF) shl 16) or
+                ((raw[3].toInt() and 0xFF) shl 24)
+
+        if (offset in 0 until raw.size - 1 &&
+            raw[offset] == 0xFF.toByte() && raw[offset + 1] == 0xD8.toByte()
+        ) {
+            soiIndex = offset
+        } else {
+            // Fallback: search after header
+            for (i in 64 until raw.size - 1) {
+                if (raw[i] == 0xFF.toByte() && raw[i + 1] == 0xD8.toByte()) {
+                    soiIndex = i
+                    break
+                }
+            }
+        }
+
+        if (soiIndex == -1) {
+            // Fallback from index 0
+            for (i in 0 until raw.size - 1) {
+                if (raw[i] == 0xFF.toByte() && raw[i + 1] == 0xD8.toByte()) {
+                    soiIndex = i
+                    break
+                }
+            }
+        }
+
+        if (soiIndex == -1) return null
+
+        // Locate JPEG EOI marker (0xFF, 0xD9) scanning from end backwards
+        var eoiIndex = -1
+        for (i in raw.size - 1 downTo soiIndex + 2) {
+            if (raw[i - 1] == 0xFF.toByte() && raw[i] == 0xD9.toByte()) {
+                eoiIndex = i
+                break
+            }
+        }
+
+        val ret = if (eoiIndex > soiIndex) {
+            raw.copyOfRange(soiIndex, eoiIndex + 1)
+        } else {
+            raw.copyOfRange(soiIndex, raw.size)
+        }
+        Log.d(TAG, "getLiveViewFrame: raw=${raw.size}, offset=$offset, soiIndex=$soiIndex, eoiIndex=$eoiIndex -> frame=${ret.size} bytes")
+        return ret
     }
 
     /**
@@ -470,9 +579,12 @@ class SonyPtpDriver(
 
     private fun sendBulk(data: ByteArray, retries: Int = 3): Boolean {
         for (attempt in 1..retries) {
-            val sent = connection.bulkTransfer(bulkOut, data, data.size, 5000)
+            val sent = connection.bulkTransfer(bulkOut, data, data.size, 2000)
             if (sent >= 0) return true
             Log.w(TAG, "bulkTransfer write failed (sent=$sent, attempt $attempt/$retries)")
+            // If bulkOut is rejected, camera may have pending bytes on bulkIn blocking the pipe
+            val drainBuf = ByteArray(16384)
+            while (connection.bulkTransfer(bulkIn, drainBuf, drainBuf.size, 100) > 0) {}
             if (attempt < retries) {
                 try {
                     Thread.sleep(100)

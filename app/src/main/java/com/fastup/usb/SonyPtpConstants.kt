@@ -56,4 +56,5 @@ object SonyPtpConstants {
     const val PTP_EVENT_CAPTURE_COMPLETE = 0x400D
     const val SONY_EVENT_OBJECT_READY = 0xC201
     const val PHOTO_OBJECT_HANDLE = 0xFFFFC001.toInt()
+    const val LIVEVIEW_OBJECT_HANDLE = 0xFFFFC002.toInt()
 }

@@ -373,6 +373,29 @@ class ApiClient(
     }
 
     /**
+     * Check if the server is reachable and responding.
+     */
+    suspend fun checkConnection(): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url(cleanUrl("api/staging/sessions"))
+                .addHeader("x-api-key", apiKey)
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(true)
+                } else {
+                    Result.failure(IOException("Server HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Probe server storage availability.
      */
     suspend fun fetchServerStorageAvailable(): Result<String> = withContext(Dispatchers.IO) {
@@ -403,11 +426,11 @@ class ApiClient(
                         Result.success("--")
                     }
                 } else {
-                    Result.success("--")
+                    Result.failure(IOException("Server HTTP ${response.code}"))
                 }
             }
-        } catch (_: Exception) {
-            Result.success("--")
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 
