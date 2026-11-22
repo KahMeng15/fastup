@@ -9,6 +9,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -207,29 +208,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
                     counter3 = Pair("Done", deviceStats.completedTransfer.toString()),
                     counter4 = Pair("Failed", deviceStats.failedTransfer.toString()),
                     fact1 = Pair("Used", storageFacts.localUsedFormatted),
-                    fact2 = Pair("Free", storageFacts.localFreeFormatted),
-                    footerContent = {
-                        Row(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Folder,
-                                contentDescription = null,
-                                tint = Slate500,
-                                modifier = Modifier.size(10.dp)
-                            )
-                            Text(
-                                text = deviceStats.currentFileName?.let { "Transferring..." } ?: "tether_captures",
-                                color = Slate400,
-                                fontSize = 8.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
+                    fact2 = Pair("Free", storageFacts.localFreeFormatted)
                 )
             }
             Box(modifier = Modifier.weight(1f)) {
@@ -246,74 +225,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
                     counter4 = Pair("Failed", stats.failedCount.toString()),
                     fact1 = Pair("Up", storageFacts.uploadedSizeFormatted),
                     fact2 = Pair("Free", storageFacts.serverAvailableFormatted),
-                    footerContent = {
-                        if (stats.failedCount > 0) {
-                            Surface(
-                                onClick = { viewModel.retryFailed() },
-                                color = Rose500.copy(alpha = 0.2f),
-                                shape = RoundedCornerShape(4.dp),
-                                border = BorderStroke(0.5.dp, Rose500.copy(alpha = 0.5f)),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(17.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(horizontal = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Icon(Icons.Default.Refresh, contentDescription = null, tint = Rose500, modifier = Modifier.size(9.dp))
-                                    Spacer(Modifier.width(2.dp))
-                                    Text("Retry ${stats.failedCount}", color = Rose500, fontSize = 8.5.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        } else if (isUploadPaused) {
-                            Surface(
-                                onClick = { viewModel.startUpload() },
-                                color = Emerald500.copy(alpha = 0.2f),
-                                shape = RoundedCornerShape(4.dp),
-                                border = BorderStroke(0.5.dp, Emerald500.copy(alpha = 0.5f)),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(17.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(horizontal = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Emerald500, modifier = Modifier.size(9.dp))
-                                    Spacer(Modifier.width(2.dp))
-                                    Text("Resume", color = Emerald500, fontSize = 8.5.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        } else {
-                            Row(
-                                modifier = Modifier.fillMaxSize(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isUploading) Icons.Default.CloudSync else Icons.Default.CloudDone,
-                                    contentDescription = null,
-                                    tint = if (isUploading) Blue400 else Emerald500,
-                                    modifier = Modifier.size(10.dp)
-                                )
-                                Text(
-                                    text = if (isUploading) "Uploading..." else "Synced",
-                                    color = Slate400,
-                                    fontSize = 8.5.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
+                    onFailedClick = if (stats.failedCount > 0) { { viewModel.retryFailed() } } else null
                 )
             }
         }
@@ -536,12 +448,12 @@ fun TransferPipelineCard(
     counter4: Pair<String, String>, // Failed
     fact1: Pair<String, String>,    // e.g. Storage Used
     fact2: Pair<String, String>,    // e.g. Storage Free
-    footerContent: @Composable () -> Unit
+    onFailedClick: (() -> Unit)? = null
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(156.dp),
+            .height(120.dp),
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
         shape = RoundedCornerShape(10.dp),
         border = BorderStroke(1.dp, DarkBorder)
@@ -549,7 +461,7 @@ fun TransferPipelineCard(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 8.dp, vertical = 7.dp),
+                .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             // Header Row: Title & Speed
@@ -614,6 +526,8 @@ fun TransferPipelineCard(
                 trackColor = Slate700
             )
 
+            Spacer(modifier = Modifier.height(2.dp))
+
             // 1 Row, 2 Columns: Col 1 for ALL Counters in ONE column, Col 2 for Facts & Data
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -628,46 +542,52 @@ fun TransferPipelineCard(
                     CounterRow(label = counter1.first, value = counter1.second, color = Slate300)
                     CounterRow(label = counter2.first, value = counter2.second, color = Amber500)
                     CounterRow(label = counter3.first, value = counter3.second, color = Emerald500)
-                    CounterRow(label = counter4.first, value = counter4.second, color = Rose500)
+                    CounterRow(
+                        label = counter4.first,
+                        value = counter4.second,
+                        color = Rose500,
+                        onClick = onFailedClick
+                    )
                 }
 
                 // Subtle Vertical Divider
                 Box(
                     modifier = Modifier
                         .width(1.dp)
-                        .height(54.dp)
+                        .height(52.dp)
                         .background(DarkBorder)
                 )
 
                 // Col 2: Facts & Data (Used and Free in the other column)
                 Column(
                     modifier = Modifier.weight(1.05f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     FactDataRow(label = fact1.first, value = fact1.second)
                     FactDataRow(label = fact2.first, value = fact2.second)
                 }
-            }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            // Fixed Height Footer Slot (17.dp) ensures Card never resizes
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(17.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                footerContent()
             }
         }
     }
 }
 
 @Composable
-fun CounterRow(label: String, value: String, color: Color) {
+fun CounterRow(
+    label: String,
+    value: String,
+    color: Color,
+    onClick: (() -> Unit)? = null
+) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .clip(RoundedCornerShape(3.dp))
+                        .clickable(onClick = onClick)
+                } else Modifier
+            ),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {

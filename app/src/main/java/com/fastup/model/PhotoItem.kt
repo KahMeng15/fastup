@@ -51,7 +51,11 @@ data class PhotoItem(
     val uploadProgress: Float = 0f,
     val uploadSpeedBps: Long = 0L,
     val errorMessage: String? = null,
-    val exif: ExifDetails = ExifDetails()
+    val exif: ExifDetails = ExifDetails(),
+    val burstGroupId: String? = null,
+    val isHero: Boolean = true,
+    val burstCount: Int = 1,
+    val qualityScore: Float? = null
 ) {
     val displayFile: File
         get() = previewFile ?: jpegFile ?: localFile

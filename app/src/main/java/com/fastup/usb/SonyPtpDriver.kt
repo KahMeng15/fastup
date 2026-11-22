@@ -57,15 +57,32 @@ class SonyPtpDriver(
                 return false
             }
 
+            if (resp != null && resp.code == SonyPtpConstants.PTP_RESP_SESSION_ALREADY_OPEN) {
+                Log.w(TAG, "PTP Session was already open on camera (0x201e). Resetting session...")
+                closeSession()
+                try { Thread.sleep(200) } catch (ignored: InterruptedException) {}
+                transactionId = 1
+                val retryCmd = PtpPacket.createCommand(SonyPtpConstants.PTP_OP_OPEN_SESSION, 0, 1)
+                sendBulk(retryCmd)
+                val retryResp = readTransactionResponse()
+                Log.i(TAG, "Reopened PTP session: code=0x${retryResp?.code?.toString(16)}")
+            }
+
             sessionOpen = true
             Log.i(TAG, "PTP Session opened successfully (code=0x${resp?.code?.toString(16)})")
 
-            // Execute Sony SDIO handshake phases 1, 2, 3 to exit "Connecting..." state
+            // Execute Sony SDIO handshake: phase 1 → phase 2 → GetExtDeviceInfo → phase 3
+            // GetExtDeviceInfo (0x9202) MUST be called between phases 2 and 3, otherwise
+            // phase 3 returns 0xa101 (device not in correct state) and the camera never
+            // properly enters PC Remote mode — causing the buffer to never drain after captures.
             val sdio1 = sendSdioConnect(1)
             Log.i(TAG, "Sony SDIO Connect phase 1: $sdio1")
 
             val sdio2 = sendSdioConnect(2)
             Log.i(TAG, "Sony SDIO Connect phase 2: $sdio2")
+
+            val extInfo = sendSdioGetExtDeviceInfo()
+            Log.i(TAG, "Sony SDIO_GetExtDeviceInfo: $extInfo")
 
             val sdio3 = sendSdioConnect(3)
             Log.i(TAG, "Sony SDIO Connect phase 3: $sdio3")
@@ -78,7 +95,7 @@ class SonyPtpDriver(
     }
 
     /**
-     * Sends Sony proprietary SDIO_Connect (0x9201) command.
+     * Sends Sony SDIO_Connect (0x9201) command.
      */
     fun sendSdioConnect(phase: Int): Boolean {
         return try {
@@ -91,6 +108,32 @@ class SonyPtpDriver(
             ok
         } catch (e: Exception) {
             Log.w(TAG, "SDIO connect phase $phase error: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Sends Sony SDIO_GetExtDeviceInfo (0x9202) to fetch device capabilities.
+     *
+     * This MUST be called between SDIO_Connect phase 2 and phase 3. Without it,
+     * phase 3 returns 0xa101 and the camera never fully enters PC Remote mode,
+     * causing the buffer/write indicator to stay stuck after each capture.
+     *
+     * The camera returns a data payload (device capability blob) followed by a
+     * PTP response. We consume both and treat any successful resp as OK.
+     */
+    fun sendSdioGetExtDeviceInfo(deviceType: Int = 0xC8): Boolean {
+        return try {
+            val tid = nextTransactionId()
+            val cmd = PtpPacket.createCommand(SonyPtpConstants.SONY_OP_SDIO_GET_EXT_DEVICE_INFO, tid, deviceType)
+            if (!sendBulk(cmd)) return false
+            // readTransactionResponse already handles DATA container + trailing RESPONSE
+            val resp = readTransactionResponse(timeoutMs = 3000)
+            val ok = resp != null && resp.code == SonyPtpConstants.PTP_RESP_OK
+            Log.i(TAG, "SDIO_GetExtDeviceInfo (0x9202) resp: 0x${resp?.code?.toString(16)}")
+            ok
+        } catch (e: Exception) {
+            Log.w(TAG, "SDIO_GetExtDeviceInfo error: ${e.message}")
             false
         }
     }
@@ -177,15 +220,19 @@ class SonyPtpDriver(
 
     /**
      * Retrieves filename and approximate size from ObjectInfo dataset.
-     * Returns null if no object is ready or camera returned a response container directly (e.g. queue empty).
+     * Returns null if no object is ready or camera returned a permanent error.
+     *
+     * When the camera returns a direct 0x2001 response (object not yet ready —
+     * common for the RAW companion immediately after the JPEG is transferred),
+     * we back off and retry with a longer delay rather than giving up immediately.
      */
-    fun getObjectInfo(handle: Int, retries: Int = 3): Pair<String, Long>? {
+    fun getObjectInfo(handle: Int, retries: Int = 6): Pair<String, Long>? {
         for (attempt in 1..retries) {
             val tid = nextTransactionId()
             val cmd = PtpPacket.createCommand(SonyPtpConstants.PTP_OP_GET_OBJECT_INFO, tid, handle)
             if (!sendBulk(cmd)) {
                 if (attempt < retries) {
-                    try { Thread.sleep(150) } catch (ignored: InterruptedException) {}
+                    try { Thread.sleep(200) } catch (ignored: InterruptedException) {}
                     continue
                 }
                 return null
@@ -196,7 +243,7 @@ class SonyPtpDriver(
             val read = connection.bulkTransfer(bulkIn, buffer, buffer.size, 2000)
             if (read < PtpPacket.HEADER_SIZE) {
                 if (attempt < retries) {
-                    try { Thread.sleep(150) } catch (ignored: InterruptedException) {}
+                    try { Thread.sleep(200) } catch (ignored: InterruptedException) {}
                     continue
                 }
                 return null
@@ -204,6 +251,14 @@ class SonyPtpDriver(
 
             val header = PtpPacket.parseHeader(buffer)
             if (header.type == SonyPtpConstants.PTP_CONTAINER_RESPONSE) {
+                if (header.code == SonyPtpConstants.PTP_RESP_OK && attempt < retries) {
+                    // Camera said OK but sent no data: RAW companion not ready yet.
+                    // Back off and retry — the camera may need up to ~1s to stage the companion object.
+                    val backoff = if (attempt <= 2) 400L else 700L
+                    Log.d(TAG, "getObjectInfo(0x${handle.toString(16)}) attempt $attempt: not ready (0x2001), retrying in ${backoff}ms...")
+                    try { Thread.sleep(backoff) } catch (ignored: InterruptedException) {}
+                    continue
+                }
                 Log.d(TAG, "getObjectInfo(0x${handle.toString(16)}) returned response container directly: code=0x${header.code.toString(16)}")
                 return null
             }
@@ -361,6 +416,42 @@ class SonyPtpDriver(
         val resp = readTransactionResponse()
         Log.i(TAG, "Completed object 0x${handle.toString(16)} download: $bytesReceived bytes, resp=0x${resp?.code?.toString(16)}")
         return bytesReceived > 0
+    }
+
+    /**
+     * NOTE: Sony A7III in PC Remote mode rejects PTP DeleteObject (0x100B) by immediately
+     * stalling the bulk-in endpoint. Do NOT call this — the camera releases its RAM buffer
+     * automatically after GetObject completes once the SDIO handshake (phases 1,2,
+     * GetExtDeviceInfo, 3) is fully established.
+     *
+     * Kept here for reference only. Always returns false without sending anything.
+     */
+    @Suppress("unused")
+    fun deleteObject(handle: Int): Boolean {
+        Log.d(TAG, "deleteObject(0x${handle.toString(16)}) skipped — not supported in PC Remote mode")
+        return false
+    }
+
+    /**
+     * Triggers the camera shutter via Sony SDIO_Capture (0x9207).
+     * Param 2 = AF + full shutter press. Useful for automated testing.
+     */
+    fun triggerCapture(): Boolean {
+        return try {
+            val tid = nextTransactionId()
+            val cmd = PtpPacket.createCommand(SonyPtpConstants.SONY_OP_CAPTURE, tid, 2)
+            if (!sendBulk(cmd)) {
+                Log.w(TAG, "triggerCapture: failed to send command")
+                return false
+            }
+            val resp = readTransactionResponse(timeoutMs = 5000)
+            val ok = resp != null && resp.code == SonyPtpConstants.PTP_RESP_OK
+            Log.i(TAG, "triggerCapture resp: 0x${resp?.code?.toString(16)}")
+            ok
+        } catch (e: Exception) {
+            Log.w(TAG, "triggerCapture error: ${e.message}")
+            false
+        }
     }
 
     private fun readPtpString(bb: ByteBuffer): String? {

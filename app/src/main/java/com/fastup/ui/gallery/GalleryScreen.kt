@@ -34,6 +34,12 @@ fun GalleryScreen(
     onPhotoClick: (String) -> Unit
 ) {
     val photos by viewModel.photos.collectAsState()
+    val curationMode by viewModel.curationViewMode.collectAsState()
+    val displayedPhotos = if (curationMode == "curated") {
+        photos.filter { it.isHero || it.burstGroupId == null }
+    } else {
+        photos
+    }
 
     Column(
         modifier = Modifier
@@ -49,14 +55,50 @@ fun GalleryScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Media Gallery (${photos.size})",
+                text = "Media Gallery (${displayedPhotos.size})",
                 color = Slate100,
-                fontSize = 20.sp,
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
             )
+
+            // Staging View Toggle Pill
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFF1E293B))
+                    .padding(2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = if (curationMode == "curated") Amber500.copy(alpha = 0.25f) else Color.Transparent,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.clickable { viewModel.setCurationViewMode("curated") }
+                ) {
+                    Text(
+                        text = "★ Curated",
+                        color = if (curationMode == "curated") Amber400 else Slate400,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                Surface(
+                    color = if (curationMode == "all") Slate700 else Color.Transparent,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.clickable { viewModel.setCurationViewMode("all") }
+                ) {
+                    Text(
+                        text = "All (${photos.size})",
+                        color = if (curationMode == "all") Slate100 else Slate400,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
         }
 
-        if (photos.isEmpty()) {
+        if (displayedPhotos.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -94,7 +136,7 @@ fun GalleryScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(photos, key = { it.id }) { photo ->
+                items(displayedPhotos, key = { it.id }) { photo ->
                     PhotoGridItem(photo = photo, onClick = { onPhotoClick(photo.id) })
                 }
             }
@@ -137,6 +179,24 @@ fun PhotoGridItem(photo: PhotoItem, onClick: () -> Unit) {
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold
             )
+        }
+
+        // Burst Count Badge
+        if (photo.burstCount > 1) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(4.dp)
+                    .background(Color(0xCC0F172A), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "★ ${photo.burstCount}",
+                    color = Amber400,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
 
         // Status Badge

@@ -30,7 +30,7 @@ data class StorageFacts(
     val localUsedFormatted: String = "0 MB",
     val localFreeFormatted: String = "0 GB",
     val uploadedSizeFormatted: String = "0 MB",
-    val serverAvailableFormatted: String = "Online"
+    val serverAvailableFormatted: String = "--"
 )
 
 class MainViewModel : ViewModel() {
@@ -52,8 +52,15 @@ class MainViewModel : ViewModel() {
     private val _deviceTransferStats = MutableStateFlow(com.fastup.usb.DeviceTransferStats())
     val deviceTransferStats: StateFlow<com.fastup.usb.DeviceTransferStats> = _deviceTransferStats.asStateFlow()
 
-    private val _serverAvailableStorage = MutableStateFlow("Online")
+    private val _serverAvailableStorage = MutableStateFlow("--")
     val serverAvailableStorage: StateFlow<String> = _serverAvailableStorage.asStateFlow()
+
+    private val _curationViewMode = MutableStateFlow("curated")
+    val curationViewMode: StateFlow<String> = _curationViewMode.asStateFlow()
+
+    fun setCurationViewMode(mode: String) {
+        _curationViewMode.value = mode
+    }
 
     init {
         checkServerStorage()

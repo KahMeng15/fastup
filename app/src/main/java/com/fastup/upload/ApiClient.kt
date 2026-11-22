@@ -390,15 +390,24 @@ class ApiClient(
                     val avail = obj?.optString("availableStorage", "")
                     if (!avail.isNullOrBlank()) {
                         Result.success(avail)
+                    } else if (obj != null && obj.has("availableBytes") && !obj.isNull("availableBytes")) {
+                        val bytes = obj.optLong("availableBytes", 0L)
+                        val formatted = when {
+                            bytes >= 1024L * 1024L * 1024L * 1024L -> String.format(java.util.Locale.US, "%.0f TB", bytes.toDouble() / (1024L * 1024L * 1024L * 1024L))
+                            bytes >= 1024L * 1024L * 1024L -> String.format(java.util.Locale.US, "%.0f GB", bytes.toDouble() / (1024L * 1024L * 1024L))
+                            bytes >= 1024L * 1024L -> String.format(java.util.Locale.US, "%.0f MB", bytes.toDouble() / (1024L * 1024L))
+                            else -> "$bytes B"
+                        }
+                        Result.success(formatted)
                     } else {
-                        Result.success("Online")
+                        Result.success("--")
                     }
                 } else {
-                    Result.success("Online")
+                    Result.success("--")
                 }
             }
         } catch (_: Exception) {
-            Result.success("Online")
+            Result.success("--")
         }
     }
 

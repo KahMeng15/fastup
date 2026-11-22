@@ -104,6 +104,37 @@ class UsbCameraManager(
                     Log.i(TAG, "USB device detached: ${device?.deviceName}")
                     disconnect()
                 }
+                ACTION_TRIGGER_CAPTURE -> {
+                    // Triggered via: adb shell am broadcast -a com.fastup.TRIGGER_CAPTURE -n com.fastup/.usb.CaptureReceiver
+                    // (or directly since it's NOT_EXPORTED, use: adb shell am broadcast -a com.fastup.TRIGGER_CAPTURE com.fastup)
+                    Log.i(TAG, "ADB capture trigger received")
+                    scope.launch {
+                        transferMutex.withLock {
+                            val d = driver
+                            if (d != null) {
+                                val ok = d.triggerCapture()
+                                Log.i(TAG, "ADB triggered capture result: $ok")
+                            } else {
+                                Log.w(TAG, "ADB trigger: no camera connected")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun triggerCapture() {
+        scope.launch {
+            transferMutex.withLock {
+                val d = driver
+                if (d != null) {
+                    Log.i(TAG, "Triggering camera capture via Sony SDIO Capture...")
+                    val ok = d.triggerCapture()
+                    Log.i(TAG, "triggerCapture result: $ok")
+                } else {
+                    Log.w(TAG, "Cannot trigger capture: no camera connected")
+                }
             }
         }
     }
@@ -115,6 +146,7 @@ class UsbCameraManager(
             addAction(ACTION_USB_PERMISSION)
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            addAction(ACTION_TRIGGER_CAPTURE)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -307,16 +339,6 @@ class UsbCameraManager(
             for (targetHandle in photoChannel) {
                 if (!isActive || _connectionState.value == CameraConnectionState.DISCONNECTED) break
                 downloadCapturedPhoto(targetHandle)
-
-                // If channel is currently empty, check if an un-notified companion object (e.g. RAW companion) is in RAM
-                val d = driver
-                if (photoChannel.isEmpty && d != null) {
-                    delay(150)
-                    if (d.hasObjectInMemory()) {
-                        Log.i(TAG, "Additional companion object in camera RAM (RAW+JPEG). Queuing download.")
-                        photoChannel.trySend(SonyPtpConstants.PHOTO_OBJECT_HANDLE)
-                    }
-                }
             }
         }
     }
@@ -324,86 +346,123 @@ class UsbCameraManager(
     private suspend fun downloadCapturedPhoto(handle: Int) {
         transferMutex.withLock {
             val d = driver ?: return@withLock
+            var currentHandle = handle
+            var downloadedCount = 0
+
             try {
-                // Short stabilization delay before querying object info
-                delay(100)
+                while (scope.isActive && _connectionState.value != CameraConnectionState.DISCONNECTED) {
+                    // Small delay: 100ms for first file, 350ms for companion RAW
+                    delay(if (downloadedCount == 0) 100 else 350)
 
-                val info = d.getObjectInfo(handle)
-                if (info == null) {
-                    Log.w(TAG, "No object ready at handle 0x${handle.toString(16)}")
-                    return@withLock
-                }
+                    var info = d.getObjectInfo(currentHandle)
+                    if (info == null && downloadedCount == 1) {
+                        // After JPEG, RAW takes ~300-600ms to be ready in camera memory.
+                        // Retry once after a brief pause before concluding it was JPEG-only.
+                        Log.i(TAG, "Checking for companion RAW object in camera buffer...")
+                        delay(400)
+                        info = d.getObjectInfo(SonyPtpConstants.PHOTO_OBJECT_HANDLE)
+                    }
 
-                val fileName = info.first.takeIf { it.isNotBlank() } ?: "DSC_${System.currentTimeMillis()}.JPG"
-                val expectedSize = info.second
+                    if (info == null) {
+                        Log.i(TAG, "No more objects ready in buffer (processed $downloadedCount file(s))")
+                        break
+                    }
 
-                _connectionState.value = CameraConnectionState.CAPTURING
-                _deviceTransferStats.update {
-                    it.copy(
-                        totalCaptured = it.totalCaptured + 1,
-                        pendingTransfer = it.pendingTransfer + 1,
-                        currentFileName = fileName
-                    )
-                }
-                Log.i(TAG, "Downloading photo handle 0x${handle.toString(16)} -> $fileName (size: $expectedSize bytes)")
+                    val fileName = info.first.takeIf { it.isNotBlank() } ?: "DSC_${System.currentTimeMillis()}.JPG"
+                    val expectedSize = info.second
+                    val isRaw = fileName.endsWith(".arw", ignoreCase = true)
 
-                val sessionFolder = com.fastup.FastUpApp.instance.uploadManager.currentSessionId.trim().ifEmpty { "weddings" }
-                val storageDir = File(context.getExternalFilesDir(null), "tether_captures/$sessionFolder").apply { mkdirs() }
-                val targetFile = File(storageDir, fileName)
+                    _connectionState.value = CameraConnectionState.CAPTURING
+                    _deviceTransferStats.update {
+                        it.copy(
+                            totalCaptured = it.totalCaptured + 1,
+                            pendingTransfer = it.pendingTransfer + 1,
+                            currentFileName = fileName
+                        )
+                    }
+                    Log.i(TAG, "Downloading photo handle 0x${currentHandle.toString(16)} -> $fileName (size: $expectedSize bytes)")
 
-                var lastSpeedUpdate = System.currentTimeMillis()
-                var lastBytesTransferred = 0L
+                    val sessionFolder = com.fastup.FastUpApp.instance.uploadManager.currentSessionId.trim().ifEmpty { "weddings" }
+                    val storageDir = File(context.getExternalFilesDir(null), "tether_captures/$sessionFolder").apply { mkdirs() }
+                    val targetFile = File(storageDir, fileName)
 
-                val success = d.downloadObject(handle, targetFile, expectedSize) { bytesRead, totalBytes ->
-                    val now = System.currentTimeMillis()
-                    val dt = now - lastSpeedUpdate
-                    if (dt >= 200) {
-                        val speed = if (dt > 0) ((bytesRead - lastBytesTransferred) * 1000L) / dt else 0L
-                        lastSpeedUpdate = now
-                        lastBytesTransferred = bytesRead
-                        val prog = if (totalBytes > 0) bytesRead.toFloat() / totalBytes else 0f
-                        _deviceTransferStats.update {
-                            it.copy(
-                                speedBps = speed,
-                                speedFormatted = formatSpeed(speed),
-                                overallProgress = if (it.totalCaptured > 0) (it.completedTransfer.toFloat() + prog) / it.totalCaptured else prog
-                            )
+                    var lastSpeedUpdate = System.currentTimeMillis()
+                    var lastBytesTransferred = 0L
+
+                    val success = d.downloadObject(currentHandle, targetFile, expectedSize) { bytesRead, totalBytes ->
+                        val now = System.currentTimeMillis()
+                        val dt = now - lastSpeedUpdate
+                        if (dt >= 200) {
+                            val speed = if (dt > 0) ((bytesRead - lastBytesTransferred) * 1000L) / dt else 0L
+                            lastSpeedUpdate = now
+                            lastBytesTransferred = bytesRead
+                            val prog = if (totalBytes > 0) bytesRead.toFloat() / totalBytes else 0f
+                            _deviceTransferStats.update {
+                                it.copy(
+                                    speedBps = speed,
+                                    speedFormatted = formatSpeed(speed),
+                                    overallProgress = if (it.totalCaptured > 0) (it.completedTransfer.toFloat() + prog) / it.totalCaptured else prog
+                                )
+                            }
                         }
                     }
-                }
 
-                if (success && targetFile.exists() && targetFile.length() > 0) {
-                    Log.i(TAG, "Photo downloaded successfully: ${targetFile.absolutePath} (${targetFile.length()} bytes)")
-                    _deviceTransferStats.update {
-                        val newCompleted = it.completedTransfer + 1
-                        val total = it.totalCaptured
-                        val prog = if (total > 0) newCompleted.toFloat() / total else 1f
-                        it.copy(
-                            pendingTransfer = maxOf(0, it.pendingTransfer - 1),
-                            completedTransfer = newCompleted,
-                            currentFileName = null,
-                            speedBps = 0L,
-                            speedFormatted = "0 kB/s",
-                            overallProgress = prog
-                        )
+                    if (success && targetFile.exists() && targetFile.length() > 0) {
+                        downloadedCount++
+                        Log.i(TAG, "Photo downloaded successfully: ${targetFile.absolutePath} (${targetFile.length()} bytes)")
+                        _deviceTransferStats.update {
+                            val newCompleted = it.completedTransfer + 1
+                            val total = it.totalCaptured
+                            val prog = if (total > 0) newCompleted.toFloat() / total else 1f
+                            it.copy(
+                                pendingTransfer = maxOf(0, it.pendingTransfer - 1),
+                                completedTransfer = newCompleted,
+                                currentFileName = null,
+                                speedBps = 0L,
+                                speedFormatted = "0 kB/s",
+                                overallProgress = prog
+                            )
+                        }
+                        withContext(Dispatchers.Main) {
+                            onPhotoCaptured(targetFile)
+                        }
+
+                        // Check camera capture format: if JPEG_ONLY, exit immediately
+                        // so the camera has total quiet on the USB bus to finalize SD card writing.
+                        val cameraFormat = com.fastup.FastUpApp.instance.uploadManager.cameraCaptureFormat
+                        if (cameraFormat == com.fastup.model.CameraCaptureFormat.JPEG_ONLY) {
+                            Log.i(TAG, "JPEG downloaded and cameraCaptureFormat is JPEG_ONLY. Buffer drain complete ($downloadedCount file(s)).")
+                            break
+                        }
+
+                        // CRITICAL: A photo capture has at most ONE RAW (.ARW) file.
+                        // Once the RAW file finishes transferring, the camera buffer is 100% drained.
+                        // We MUST break immediately and avoid sending any further PTP commands,
+                        // giving the camera complete quiet on the USB bus to finalize its SD card write
+                        // without crashing or power-cycling!
+                        if (isRaw || downloadedCount >= 2) {
+                            Log.i(TAG, "RAW companion or multi-file downloaded. Buffer drain complete ($downloadedCount file(s)).")
+                            break
+                        }
+                    } else {
+                        Log.w(TAG, "Photo download for handle 0x${currentHandle.toString(16)} returned false or empty file")
+                        _deviceTransferStats.update {
+                            it.copy(
+                                pendingTransfer = maxOf(0, it.pendingTransfer - 1),
+                                failedTransfer = it.failedTransfer + 1,
+                                currentFileName = null,
+                                speedBps = 0L,
+                                speedFormatted = "0 kB/s"
+                            )
+                        }
+                        if (targetFile.exists() && targetFile.length() == 0L) {
+                            targetFile.delete()
+                        }
+                        break
                     }
-                    withContext(Dispatchers.Main) {
-                        onPhotoCaptured(targetFile)
-                    }
-                } else {
-                    Log.w(TAG, "Photo download for handle 0x${handle.toString(16)} returned false or empty file")
-                    _deviceTransferStats.update {
-                        it.copy(
-                            pendingTransfer = maxOf(0, it.pendingTransfer - 1),
-                            failedTransfer = it.failedTransfer + 1,
-                            currentFileName = null,
-                            speedBps = 0L,
-                            speedFormatted = "0 kB/s"
-                        )
-                    }
-                    if (targetFile.exists() && targetFile.length() == 0L) {
-                        targetFile.delete()
-                    }
+
+                    // For the next file in the buffer (e.g. RAW companion), target PHOTO_OBJECT_HANDLE
+                    currentHandle = SonyPtpConstants.PHOTO_OBJECT_HANDLE
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error downloading captured object 0x${handle.toString(16)}", e)
@@ -453,5 +512,6 @@ class UsbCameraManager(
     companion object {
         private const val TAG = "UsbCameraManager"
         private const val ACTION_USB_PERMISSION = "com.fastup.USB_PERMISSION"
+        const val ACTION_TRIGGER_CAPTURE = "com.fastup.TRIGGER_CAPTURE"
     }
 }

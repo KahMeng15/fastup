@@ -40,8 +40,13 @@ class UsbTetherService : Service() {
 
     fun getCameraManager(): UsbCameraManager = usbCameraManager
 
+    fun triggerCapture() {
+        usbCameraManager.triggerCapture()
+    }
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
 
         // 1. Immediately enter foreground to satisfy Android 8+ foreground service rules
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -133,11 +138,14 @@ class UsbTetherService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
+        instance = null
         usbCameraManager.stop()
         super.onDestroy()
     }
 
     companion object {
         const val NOTIFICATION_ID = 1001
+        var instance: UsbTetherService? = null
+            private set
     }
 }

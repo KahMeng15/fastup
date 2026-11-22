@@ -231,3 +231,25 @@ If the USB tests succeed, this is the architecture I recommend.
   - **Gallery**: 3-column media grid with format chips, upload status badges, and zoomable detail view with full EXIF sheet.
   - **Settings**: Upload format picker, backend URL, auto-upload toggle, and server cleanup trigger.
 - [x] Compiled APK (`app/build/outputs/apk/debug/app-debug.apk`), deployed directly to the connected Samsung Galaxy A52s, launched and verified on-screen.
+
+### **Phase 3: Server-Centric AI Burst Curation & Dual-View Staging** ✅ COMPLETED
+- [x] **Database Schema**: Added `burst_group_id`, `is_hero`, `quality_score`, and `face_count` to `media_files`; added `allow_view_mode_toggle`, `show_hidden_alternates`, and `allow_hero_selection` to `shared_folders`.
+- [x] **Server-Side AI Pipeline (`hellomyphotos`)**:
+  - Implemented debounced burst clustering ($\Delta t \le 2.2\text{s}$) in `StagingService.evaluateBurstsForFolder`.
+  - Added **People-Count Guardrail** ($\Delta \text{Faces} \ne 0$ immediately splits burst to prevent hiding shots where people joined).
+  - Evaluates focus sharpness via Laplacian convolution kernel stats on `sharp` thumbnail, factoring face count & gaze.
+  - Automatically designates best pick hero (`is_hero = true`) and alternates (`is_hero = false`).
+- [x] **Dual-View Staging API**:
+  - `GET /api/staging/*?view=curated` (heroes & standalones) vs `?view=all` (full sequence).
+  - `GET /api/staging/media/:id/alternates` & `/api/shares/:token/media/:id/alternates` (fetches hidden burst peers for lightbox).
+  - `POST /api/staging/media/:id/set-hero` & `/api/shares/:token/media/:id/set-hero` (1-click hero promotion).
+- [x] **Web Gallery Lightbox (`hellomyphotos/frontend`)**:
+  - Staging view toggle pill: `[ ★ Curated | All ]` (respecting `allow_view_mode_toggle`).
+  - Added burst badge on grid photos (`★ N shots`).
+  - Lightbox `.burst-filmstrip-drawer` displaying hidden alternate shots with active preview switcher.
+  - 1-click "Set Best" hero promotion and direct alternate download buttons.
+  - Share link parameter enforcement (`allow_view_mode_toggle`, `show_hidden_alternates`, `allow_hero_selection`).
+- [x] **FastUp Android App Sync & UI**:
+  - Added `curationViewMode` state flow and dual-view switcher (`★ Curated` vs `All`) in `GalleryScreen.kt`.
+  - Added burst counter badge (`★ N`) on grid items in `GalleryScreen.kt`.
+  - Verified compilation and built debug APK (`assembleDebug` passing).

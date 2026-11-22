@@ -72,11 +72,11 @@ class UploadManager(private val context: Context) {
 
     var cameraCaptureFormat: com.fastup.model.CameraCaptureFormat = try {
         com.fastup.model.CameraCaptureFormat.valueOf(
-            prefs.getString(PREF_CAMERA_CAPTURE_FORMAT, com.fastup.model.CameraCaptureFormat.RAW_AND_JPEG.name)
-                ?: com.fastup.model.CameraCaptureFormat.RAW_AND_JPEG.name
+            prefs.getString(PREF_CAMERA_CAPTURE_FORMAT, com.fastup.model.CameraCaptureFormat.JPEG_ONLY.name)
+                ?: com.fastup.model.CameraCaptureFormat.JPEG_ONLY.name
         )
     } catch (_: Exception) {
-        com.fastup.model.CameraCaptureFormat.RAW_AND_JPEG
+        com.fastup.model.CameraCaptureFormat.JPEG_ONLY
     }
         set(value) {
             field = value
