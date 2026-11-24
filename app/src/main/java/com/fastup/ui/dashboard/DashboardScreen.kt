@@ -74,7 +74,6 @@ fun DashboardScreen(
     val liveViewerMode by viewModel.liveViewerMode.collectAsState()
     val liveViewBitmap by viewModel.liveViewBitmap.collectAsState()
     val isLiveViewStreaming by viewModel.isLiveViewStreaming.collectAsState()
-    val cameraBattery by viewModel.cameraBattery.collectAsState()
 
     // Real-time Phone Battery Tracking
     var phoneBatteryLevel by remember { mutableIntStateOf(100) }
@@ -209,26 +208,20 @@ fun DashboardScreen(
             },
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // 1. Heading (Fades out when not interacted with)
-        AnimatedVisibility(
-            visible = isHeaderVisible,
-            enter = fadeIn(),
-            exit = fadeOut()
+        // 1. Heading (Always visible, does not time out)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .padding(top = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
-                    .padding(top = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "FastUp Dashboard",
-                    color = Slate100,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
+            Text(
+                text = "FastUp Dashboard",
+                color = Slate100,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
+            )
         }
 
         // 2. View finder / Quick preview (Full available width, edge-to-edge with no rounded corners or border)
@@ -238,7 +231,10 @@ fun DashboardScreen(
                     .fillMaxWidth()
                     .aspectRatio(3f / 2f)
                     .background(Color.Black)
-                    .clickable { onPhotoClick(latestPhoto.id) },
+                    .clickable {
+                        lastInteractionTimestamp = System.currentTimeMillis()
+                        onPhotoClick(latestPhoto.id)
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
@@ -249,29 +245,35 @@ fun DashboardScreen(
                 )
 
                 // Top Bar Overlay
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter)
-                        .background(Color.Black.copy(alpha = 0.55f))
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = isHeaderVisible,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.TopCenter)
                 ) {
-                    Text(
-                        text = "LATEST CAPTURE: ${latestPhoto.fileName}",
-                        color = Slate100,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "LATEST CAPTURE: ${latestPhoto.fileName}",
+                            color = Slate100,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
 
-                    Text(
-                        text = "Tap to inspect",
-                        color = Slate300,
-                        fontSize = 10.sp
-                    )
+                        Text(
+                            text = "Tap to inspect",
+                            color = Slate300,
+                            fontSize = 10.sp
+                        )
+                    }
                 }
             }
         } else if (liveViewerMode == LiveViewerMode.LIVE_VIEWFINDER) {
@@ -288,7 +290,14 @@ fun DashboardScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(liveViewAspect)
-                    .background(Color.Black),
+                    .background(Color.Black)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        lastInteractionTimestamp = System.currentTimeMillis()
+                        isHeaderVisible = !isHeaderVisible
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 if (frameBitmap != null) {
@@ -337,40 +346,48 @@ fun DashboardScreen(
                     }
                 }
 
-                // Live Stream Header Overlay
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter)
-                        .background(Color.Black.copy(alpha = 0.65f))
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                // Live Stream Header Overlay (Times out when idle, tap viewfinder to toggle)
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = isHeaderVisible,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.TopCenter)
                 ) {
-                    Text(
-                        text = if (isLiveViewStreaming) "LIVE VIEWFINDER (SENSOR)" else "VIEWFINDER PAUSED",
-                        color = Slate100,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.65f))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isLiveViewStreaming) "LIVE VIEWFINDER (SENSOR)" else "VIEWFINDER PAUSED",
+                            color = Slate100,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
 
-                    if (cameraState == CameraConnectionState.CONNECTED) {
-                        FilledTonalButton(
-                            onClick = {
-                                if (isLiveViewStreaming) viewModel.stopLiveView() else viewModel.startLiveView()
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(24.dp),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = if (isLiveViewStreaming) Slate700 else Blue600,
-                                contentColor = Slate100
-                            )
-                        ) {
-                            Text(
-                                text = if (isLiveViewStreaming) "Pause" else "Resume",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                        if (cameraState == CameraConnectionState.CONNECTED) {
+                            FilledTonalButton(
+                                onClick = {
+                                    lastInteractionTimestamp = System.currentTimeMillis()
+                                    isHeaderVisible = true
+                                    if (isLiveViewStreaming) viewModel.stopLiveView() else viewModel.startLiveView()
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.height(24.dp),
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = if (isLiveViewStreaming) Slate700 else Blue600,
+                                    contentColor = Slate100
+                                )
+                            ) {
+                                Text(
+                                    text = if (isLiveViewStreaming) "Pause" else "Resume",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }
@@ -466,17 +483,6 @@ fun DashboardScreen(
             phoneBatteryLevel > 10 -> Amber500
             else -> Rose500
         }
-        val cameraBatteryColor = when {
-            cameraBattery == null -> Slate400
-            cameraBattery!! > 20 -> Emerald500
-            cameraBattery!! > 10 -> Amber500
-            else -> Rose500
-        }
-        val cameraBatteryText = if (cameraState == CameraConnectionState.CONNECTED) {
-            if (cameraBattery != null) "$cameraBattery%" else "Ready"
-        } else {
-            "--"
-        }
 
         Card(
             modifier = Modifier
@@ -494,7 +500,9 @@ fun DashboardScreen(
             ) {
                 // Section 1: Network Strength
                 Column(
-                    modifier = Modifier.weight(1.2f),
+                    modifier = Modifier
+                        .weight(1.1f)
+                        .padding(end = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
                     Text(
@@ -528,7 +536,7 @@ fun DashboardScreen(
                 Column(
                     modifier = Modifier
                         .weight(0.9f)
-                        .padding(horizontal = 8.dp),
+                        .padding(start = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
                     Text(
@@ -541,39 +549,6 @@ fun DashboardScreen(
                     Text(
                         text = "$phoneBatteryLevel%${if (isPhoneCharging) " ⚡" else ""}",
                         color = phoneBatteryColor,
-                        fontSize = 11.sp,
-                        lineHeight = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1
-                    )
-                }
-
-                // Vertical Divider
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(26.dp)
-                        .background(DarkBorder)
-                )
-
-                // Section 3: Camera Battery
-                Column(
-                    modifier = Modifier
-                        .weight(0.9f)
-                        .padding(start = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
-                ) {
-                    Text(
-                        text = "CAM BATT",
-                        color = Slate400,
-                        fontSize = 9.sp,
-                        lineHeight = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = cameraBatteryText,
-                        color = cameraBatteryColor,
                         fontSize = 11.sp,
                         lineHeight = 13.sp,
                         fontWeight = FontWeight.Bold,

@@ -52,9 +52,6 @@ class MainViewModel : ViewModel() {
     private val _cameraModel = MutableStateFlow("Camera")
     val cameraModel: StateFlow<String> = _cameraModel.asStateFlow()
 
-    private val _cameraBattery = MutableStateFlow<Int?>(null)
-    val cameraBattery: StateFlow<Int?> = _cameraBattery.asStateFlow()
-
     private val _deviceTransferStats = MutableStateFlow(com.fastup.usb.DeviceTransferStats())
     val deviceTransferStats: StateFlow<com.fastup.usb.DeviceTransferStats> = _deviceTransferStats.asStateFlow()
 
@@ -360,11 +357,6 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             manager.cameraModel.collect { model ->
                 _cameraModel.value = model
-            }
-        }
-        viewModelScope.launch {
-            manager.cameraBattery.collect { batt ->
-                _cameraBattery.value = batt
             }
         }
         viewModelScope.launch {

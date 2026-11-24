@@ -41,6 +41,8 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val targetFolder by viewModel.currentSessionId.collectAsState()
     val shareSession by viewModel.shareSession.collectAsState()
     val currentViewerMode by viewModel.liveViewerMode.collectAsState()
+    val photos by viewModel.photos.collectAsState()
+    val failedCount = remember(photos) { photos.count { it.status == com.fastup.model.UploadStatus.FAILED } }
 
     var selectedViewerMode by remember(currentViewerMode) { mutableStateOf(currentViewerMode) }
     var selectedFolderId by remember { mutableStateOf<String?>(null) }
@@ -51,15 +53,16 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var sessionNameInput by remember(targetFolder) { mutableStateOf(targetFolder) }
     var isGeneratingShare by remember { mutableStateOf(false) }
     var pairOtpCode by remember { mutableStateOf("") }
-    var pairServerUrl by remember { mutableStateOf(viewModel.serverUrl) }
     var isPairing by remember { mutableStateOf(false) }
 
     var urlInput by remember { mutableStateOf(viewModel.serverUrl) }
-    var apiKeyInput by remember { mutableStateOf(viewModel.apiKey) }
     var selectedCameraFormat by remember { mutableStateOf(viewModel.cameraCaptureFormat) }
     var selectedFormat by remember { mutableStateOf(viewModel.uploadFormat) }
     var autoUpload by remember { mutableStateOf(viewModel.autoUpload) }
     var wifiOnly by remember { mutableStateOf(viewModel.wifiOnly) }
+
+    var showCameraGuide by remember { mutableStateOf(false) }
+    var showBatteryGuide by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.refreshLocalFolders()
@@ -170,7 +173,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
                     Button(
                         onClick = {
-                            pairServerUrl = viewModel.serverUrl
                             pairOtpCode = ""
                             showPairDialog = true
                         },
@@ -515,10 +517,40 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         Text("Force Stop Upload", fontWeight = FontWeight.Bold)
                     }
                 }
+
+                // Retry Failed Uploads Button
+                OutlinedButton(
+                    onClick = {
+                        viewModel.retryFailed()
+                        Toast.makeText(context, "Retrying $failedCount failed upload(s)...", Toast.LENGTH_SHORT).show()
+                    },
+                    enabled = failedCount > 0,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = if (failedCount > 0) Amber500.copy(alpha = 0.15f) else Color.Transparent,
+                        contentColor = if (failedCount > 0) Amber500 else Slate400,
+                        disabledContentColor = Slate600
+                    ),
+                    border = BorderStroke(1.dp, if (failedCount > 0) Amber500 else Slate700),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (failedCount > 0) "Retry All Failed Uploads ($failedCount)" else "No Failed Uploads",
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 
-        // Sony Camera Tethering Guide Card
+        // Sony Camera Tethering Guide Card (Collapsible)
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Slate800.copy(alpha = 0.85f)),
@@ -532,57 +564,74 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.CameraAlt,
-                        contentDescription = null,
-                        tint = Blue400,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = "Sony Camera Tethering Setup",
-                        color = Slate100,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = null,
+                            tint = Blue400,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "Sony Camera Tethering Setup",
+                            color = Slate100,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                    }
+                    IconButton(onClick = { showCameraGuide = !showCameraGuide }) {
+                        Icon(
+                            imageVector = if (showCameraGuide) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (showCameraGuide) "Collapse" else "Expand",
+                            tint = Slate400
+                        )
+                    }
                 }
 
-                Text(
-                    text = "For instant transfer (~200ms) with zero camera buffer delay:",
-                    color = Slate300,
-                    fontSize = 13.sp
-                )
+                AnimatedVisibility(visible = showCameraGuide) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "For instant transfer (~200ms) with zero camera buffer delay:",
+                            color = Slate300,
+                            fontSize = 13.sp
+                        )
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Slate900.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "1. Camera Quality: RAW + JPEG (SD card keeps full RAW)",
-                        color = Slate200,
-                        fontSize = 12.sp
-                    )
-                    Text(
-                        text = "2. PC Remote Settings:\n   • Still Img. Save Dest. → PC+Camera\n   • RAW+J PC Save Img → JPEG Only",
-                        color = Slate200,
-                        fontSize = 12.sp
-                    )
-                    Text(
-                        text = "3. FastUp Setting: Use \"JPEG only\" below",
-                        color = Blue400,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Slate900.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "1. Camera Quality: RAW + JPEG (SD card keeps full RAW)",
+                                color = Slate200,
+                                fontSize = 12.sp
+                            )
+                            Text(
+                                text = "2. PC Remote Settings:\n   • Still Img. Save Dest. → PC+Camera\n   • RAW+J PC Save Img → JPEG Only",
+                                color = Slate200,
+                                fontSize = 12.sp
+                            )
+                            Text(
+                                text = "3. FastUp Setting: Use \"JPEG only\" below",
+                                color = Blue400,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        // Battery Saver / USB Power Management Card
+        // Battery Saver / USB Power Management Card (Collapsible)
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Slate800.copy(alpha = 0.9f)),
@@ -617,90 +666,104 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             fontSize = 15.sp
                         )
                     }
-                    Surface(
-                        color = Emerald500.copy(alpha = 0.2f),
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Text(
-                            text = "RECOMMENDED",
-                            color = Emerald500,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            color = Emerald500.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = "RECOMMENDED",
+                                color = Emerald500,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        IconButton(onClick = { showBatteryGuide = !showBatteryGuide }) {
+                            Icon(
+                                imageVector = if (showBatteryGuide) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = if (showBatteryGuide) "Collapse" else "Expand",
+                                tint = Slate400
+                            )
+                        }
                     }
                 }
 
-                Text(
-                    text = "Prevent the Sony camera from draining phone battery over the USB-C cable:",
-                    color = Slate300,
-                    fontSize = 13.sp
-                )
+                AnimatedVisibility(visible = showBatteryGuide) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "Prevent the Sony camera from draining phone battery over the USB-C cable:",
+                            color = Slate300,
+                            fontSize = 13.sp
+                        )
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Slate900.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Box(
+                        Column(
                             modifier = Modifier
-                                .size(6.dp)
-                                .offset(y = 6.dp)
-                                .background(Emerald500, CircleShape)
-                        )
+                                .fillMaxWidth()
+                                .background(Slate900.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .offset(y = 6.dp)
+                                        .background(Emerald500, CircleShape)
+                                )
+                                Text(
+                                    text = "Step 1: On your camera, press MENU.",
+                                    color = Slate200,
+                                    fontSize = 12.sp
+                                )
+                            }
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .offset(y = 6.dp)
+                                        .background(Emerald500, CircleShape)
+                                )
+                                Text(
+                                    text = "Step 2: Go to Setup (yellow briefcase 💼) → Page 4/5.",
+                                    color = Slate200,
+                                    fontSize = 12.sp
+                                )
+                            }
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .offset(y = 6.dp)
+                                        .background(Emerald500, CircleShape)
+                                )
+                                Text(
+                                    text = "Step 3: Set [USB Power Supply] to \"Off\".",
+                                    color = Emerald400,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
                         Text(
-                            text = "Step 1: On your camera, press MENU.",
-                            color = Slate200,
-                            fontSize = 12.sp
-                        )
-                    }
-                    Row(
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .offset(y = 6.dp)
-                                .background(Emerald500, CircleShape)
-                        )
-                        Text(
-                            text = "Step 2: Go to Setup (yellow briefcase 💼) → Page 4/5.",
-                            color = Slate200,
-                            fontSize = 12.sp
-                        )
-                    }
-                    Row(
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .offset(y = 6.dp)
-                                .background(Emerald500, CircleShape)
-                        )
-                        Text(
-                            text = "Step 3: Set [USB Power Supply] to \"Off\".",
-                            color = Emerald400,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
+                            text = "💡 With this setting Off, the camera runs exclusively on its own internal battery and will not draw charging current from your phone, preserving your phone's battery life throughout full event shoots.",
+                            color = Slate400,
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.sp
                         )
                     }
                 }
-
-                Text(
-                    text = "💡 With this setting Off, the camera runs exclusively on its own internal battery and will not draw charging current from your phone, preserving your phone's battery life throughout full event shoots.",
-                    color = Slate400,
-                    fontSize = 11.5.sp,
-                    lineHeight = 16.sp
-                )
             }
         }
 
@@ -827,23 +890,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         viewModel.serverUrl = it
                     },
                     label = { Text("Server URL (e.g. http://10.0.0.43:8000)", color = Slate400) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Slate100,
-                        unfocusedTextColor = Slate100,
-                        focusedBorderColor = Blue500,
-                        unfocusedBorderColor = Slate600
-                    ),
-                    singleLine = true
-                )
-
-                OutlinedTextField(
-                    value = apiKeyInput,
-                    onValueChange = {
-                        apiKeyInput = it
-                        viewModel.apiKey = it
-                    },
-                    label = { Text("Staging API Key (STAGING_API_KEY)", color = Slate400) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Slate100,
@@ -1162,19 +1208,38 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             fontSize = 13.sp
                         )
 
-                        OutlinedTextField(
-                            value = pairServerUrl,
-                            onValueChange = { pairServerUrl = it },
-                            label = { Text("Server URL") },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Blue500,
-                                unfocusedBorderColor = Slate600,
-                                focusedTextColor = Slate100,
-                                unfocusedTextColor = Slate100
-                            ),
+                        Surface(
+                            color = Slate900,
+                            shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.fillMaxWidth()
-                        )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Cloud,
+                                    contentDescription = null,
+                                    tint = Blue400,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Connecting to Server:",
+                                        color = Slate400,
+                                        fontSize = 11.sp
+                                    )
+                                    Text(
+                                        text = viewModel.serverUrl,
+                                        color = Slate200,
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                        }
 
                         OutlinedTextField(
                             value = pairOtpCode,
@@ -1200,12 +1265,11 @@ fun SettingsScreen(viewModel: MainViewModel) {
                                 return@Button
                             }
                             isPairing = true
-                            viewModel.pairWithOtp(pairServerUrl.trim(), pairOtpCode.trim()) { res ->
+                            viewModel.pairWithOtp(viewModel.serverUrl.trim(), pairOtpCode.trim()) { res ->
                                 isPairing = false
                                 res.onSuccess { pName ->
                                     showPairDialog = false
                                     urlInput = viewModel.serverUrl
-                                    apiKeyInput = viewModel.apiKey
                                     selectedFormat = viewModel.uploadFormat
                                     autoUpload = viewModel.autoUpload
                                     wifiOnly = viewModel.wifiOnly
@@ -1232,49 +1296,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         onClick = { showPairDialog = false },
                         enabled = !isPairing
                     ) {
-                        Text("Cancel", color = Slate400)
-                    }
-                },
-                containerColor = Slate800,
-                shape = RoundedCornerShape(16.dp)
-            )
-        }
-
-        // Confirmation Dialog for Clearing Local Storage
-        if (showClearDialog && selectedFolder != null) {
-            AlertDialog(
-                onDismissRequest = { showClearDialog = false },
-                title = {
-                    Text(text = "Clear Local Photos?", color = Slate100, fontWeight = FontWeight.Bold)
-                },
-                text = {
-                    Text(
-                        text = "Are you sure you want to permanently delete ${selectedFolder.fileCount} photo(s) (${formatStorageBytes(selectedFolder.totalSizeBytes)}) from '${selectedFolder.displayName}'?\n\nThis will free up phone storage and remove them from the upload queue.",
-                        color = Slate300,
-                        fontSize = 14.sp
-                    )
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            val folderToDelete = selectedFolder.id
-                            val folderName = selectedFolder.displayName
-                            showClearDialog = false
-                            viewModel.clearLocalStorage(folderToDelete) { success ->
-                                if (success) {
-                                    Toast.makeText(context, "Cleared $folderName from storage!", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "Failed to clear local storage", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Rose500)
-                    ) {
-                        Text("Delete Permanently")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showClearDialog = false }) {
                         Text("Cancel", color = Slate400)
                     }
                 },
