@@ -241,7 +241,10 @@ class UsbCameraManager(
 
     fun triggerCapture() {
         scope.launch {
+            // Pause live view immediately so no PTP traffic hits the camera
+            // while it processes the shutter command and begins buffering the image.
             isLiveViewPausedForCapture = true
+            quietPeriodJob?.cancel()
             try {
                 transferMutex.withLock {
                     val d = driver
@@ -251,11 +254,17 @@ class UsbCameraManager(
                         Log.i(TAG, "triggerCapture result: $ok")
                     } else {
                         Log.w(TAG, "Cannot trigger capture: no camera connected")
+                        // No shot fired — safe to resume immediately
+                        isLiveViewPausedForCapture = pendingCaptureCount.get() > 0 || !photoChannel.isEmpty
                     }
                 }
-            } finally {
-                delay(2000)
-                if (photoChannel.isEmpty && !transferMutex.isLocked && _connectionState.value == CameraConnectionState.CONNECTED) {
+                // The 0xC201 "Object Ready" event will arrive shortly and increment
+                // pendingCaptureCount via the eventJob. We do NOT set isLiveViewPausedForCapture=false
+                // here — that is exclusively managed by scheduleLiveViewResume() so the
+                // quiet window always coordinates with the actual download completion.
+            } catch (e: Exception) {
+                Log.e(TAG, "triggerCapture error", e)
+                if (pendingCaptureCount.get() <= 0 && photoChannel.isEmpty) {
                     isLiveViewPausedForCapture = false
                 }
             }
