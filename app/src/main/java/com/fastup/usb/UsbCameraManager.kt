@@ -406,7 +406,8 @@ class UsbCameraManager(
             while (isActive && _connectionState.value != CameraConnectionState.DISCONNECTED && _connectionState.value != CameraConnectionState.ERROR) {
                 val d = driver ?: break
 
-                // Poll incoming PTP event from camera interrupt endpoint (blocking up to 500ms)
+                // Poll incoming PTP event from camera interrupt endpoint (blocking up to 500ms).
+                // We ALWAYS poll — this is a READ; stopping it means we miss 0xC201 photo events.
                 val event = d.pollEvent(timeoutMs = 500)
                 if (event != null) {
                     val eventCode = event.first
@@ -421,8 +422,10 @@ class UsbCameraManager(
                             if (level != null && level in 0..100) {
                                 _cameraBattery.value = level
                                 Log.i(TAG, "Camera battery level updated via event: $level%")
-                            } else {
-                                // Refresh battery via 0x9209 query in background
+                            } else if (!isLiveViewPausedForCapture) {
+                                // Only fire the outgoing queryBatteryLevel() PTP command when the
+                                // camera is NOT flushing to SD. The A7III crashes if it receives
+                                // any outgoing PTP command during the SD-write window.
                                 scope.launch {
                                     val batt = transferMutex.withLock { driver?.queryBatteryLevel() }
                                     if (batt != null) _cameraBattery.value = batt
@@ -580,12 +583,14 @@ class UsbCameraManager(
                 if (_connectionState.value == CameraConnectionState.CAPTURING) {
                     _connectionState.value = CameraConnectionState.CONNECTED
                 }
-                // Allow generous quiet time (2500ms) for camera to finish flushing clusters to SD card
-                // before resuming live view polling.
+                // Allow generous quiet time (8000ms) for camera to finish flushing JPEG clusters
+                // to SD card before resuming ANY PTP traffic (live view + interrupt poll).
+                // The eventJob interrupt poll is gated by isLiveViewPausedForCapture, so this
+                // window covers BOTH live view and the interrupt endpoint.
                 scope.launch {
-                    delay(2500)
+                    delay(8000)
                     val elapsed = System.currentTimeMillis() - lastCaptureTimeMs
-                    if (elapsed >= 2400 && photoChannel.isEmpty && !transferMutex.isLocked && _connectionState.value == CameraConnectionState.CONNECTED) {
+                    if (elapsed >= 7800 && photoChannel.isEmpty && !transferMutex.isLocked && _connectionState.value == CameraConnectionState.CONNECTED) {
                         isLiveViewPausedForCapture = false
                     }
                 }
