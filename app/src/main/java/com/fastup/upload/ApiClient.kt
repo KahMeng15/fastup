@@ -62,8 +62,25 @@ class ApiClient(
         }
     }
 
+    @Volatile
+    var networkSimulation: com.fastup.model.NetworkSimulationConfig = com.fastup.model.NetworkSimulationConfig()
+
     private val client = OkHttpClient.Builder()
         .addInterceptor { chain ->
+            val sim = networkSimulation
+            if (sim.enabled) {
+                // 1. Artificial latency delay
+                if (sim.latencyMs > 0) {
+                    try {
+                        Thread.sleep(sim.latencyMs)
+                    } catch (_: InterruptedException) {}
+                }
+                // 2. Initial connection drop simulation (pre-handshake packet loss)
+                if (sim.dropRatePercent > 0 && kotlin.random.Random.nextInt(100) < (sim.dropRatePercent / 2).coerceAtLeast(1)) {
+                    throw IOException("Simulated network drop: Packet loss before connection established (${sim.dropRatePercent}% rate)")
+                }
+            }
+
             val original = chain.request()
             val baseOrigin = cleanUrl("").removeSuffix("/")
             val proto = if (baseOrigin.startsWith("https", ignoreCase = true)) "https" else "http"
@@ -122,7 +139,13 @@ class ApiClient(
             }
 
             val fileRequestBody = file.asRequestBody(mediaType)
-            val progressBody = ProgressRequestBody(fileRequestBody, onProgress)
+            val sim = networkSimulation
+            val progressBody = ProgressRequestBody(
+                delegate = fileRequestBody,
+                throttleKbps = if (sim.enabled) sim.throttleKbps else 0L,
+                dropRatePercent = if (sim.enabled) sim.dropRatePercent else 0,
+                onProgress = onProgress
+            )
 
             val multipartBody = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
@@ -273,8 +296,10 @@ class ApiClient(
     suspend fun createShareLink(sessionId: String, expiresInHours: Int = 24): Result<ShareSessionInfo> =
         withContext(Dispatchers.IO) {
             try {
+                val cleanSession = sessionId.trim().trimStart('/')
                 val json = JSONObject().apply {
-                    put("session_id", sessionId)
+                    put("sessionId", cleanSession)
+                    put("session_id", cleanSession)
                     put("expires_in_hours", expiresInHours)
                 }
 
@@ -286,15 +311,39 @@ class ApiClient(
                     .build()
 
                 client.newCall(request).execute().use { response ->
+                    val bodyStr = response.body?.string() ?: "{}"
                     if (!response.isSuccessful) {
-                        Result.failure(IOException("Failed to create share link: HTTP ${response.code}"))
+                        val errMsg = try { JSONObject(bodyStr).optString("error", "HTTP ${response.code}") } catch (_: Exception) { "HTTP ${response.code}" }
+                        Result.failure(IOException("Server error creating share link: $errMsg"))
                     } else {
-                        val bodyStr = response.body?.string() ?: "{}"
                         val obj = JSONObject(bodyStr)
-                        val shareUrl = when {
+                        // The server MUST generate the shareToken in shared_folders table.
+                        val serverToken = when {
+                            obj.has("shareToken") -> obj.getString("shareToken")
+                            obj.has("share_token") -> obj.getString("share_token")
+                            else -> null
+                        }
+                        if (serverToken.isNullOrBlank()) {
+                            return@use Result.failure(IOException("Server did not return a valid share token"))
+                        }
+
+                        val rawUrl = when {
+                            obj.has("shareUrl") -> obj.getString("shareUrl")
                             obj.has("share_url") -> obj.getString("share_url")
                             obj.has("url") -> obj.getString("url")
-                            else -> "${baseUrl.trimEnd('/')}/share/$sessionId"
+                            else -> "${baseUrl.trimEnd('/')}/share/$serverToken"
+                        }
+
+                        // Ensure link uses phone-accessible server host if backend configured with localhost
+                        val shareUrl = if (rawUrl.startsWith("/")) {
+                            "${baseUrl.trimEnd('/')}$rawUrl"
+                        } else if (rawUrl.contains("localhost") || rawUrl.contains("127.0.0.1")) {
+                            val baseUri = try { java.net.URI(baseUrl) } catch (e: Exception) { null }
+                            if (baseUri != null && baseUri.host != null) {
+                                rawUrl.replace("localhost", baseUri.host).replace("127.0.0.1", baseUri.host)
+                            } else rawUrl
+                        } else {
+                            rawUrl
                         }
                         Result.success(ShareSessionInfo(sessionId = sessionId, shareUrl = shareUrl))
                     }
@@ -899,15 +948,33 @@ class ApiClient(
                 val bodyStr = response.body?.string() ?: "{}"
                 if (!response.isSuccessful) {
                     val err = try { JSONObject(bodyStr).optString("error", bodyStr) } catch (_: Exception) { bodyStr }
-                    Result.failure(IOException("Failed to create media share: $err"))
+                    Result.failure(IOException("Server error creating media share: $err"))
                 } else {
                     val obj = JSONObject(bodyStr)
-                    val shareUrl = when {
-                        obj.has("share_url") -> obj.getString("share_url")
+                    val serverToken = when {
+                        obj.has("shareToken") -> obj.getString("shareToken")
+                        obj.has("share_token") -> obj.getString("share_token")
+                        else -> null
+                    }
+                    if (serverToken.isNullOrBlank()) {
+                        return@use Result.failure(IOException("Server did not return a valid share token"))
+                    }
+
+                    val rawUrl = when {
                         obj.has("shareUrl") -> obj.getString("shareUrl")
+                        obj.has("share_url") -> obj.getString("share_url")
                         obj.has("url") -> obj.getString("url")
-                        obj.has("shareToken") -> "${baseUrl.trimEnd('/')}/share/${obj.getString("shareToken")}"
-                        else -> "${baseUrl.trimEnd('/')}/share/$sessionId"
+                        else -> "${baseUrl.trimEnd('/')}/share/$serverToken"
+                    }
+                    val shareUrl = if (rawUrl.startsWith("/")) {
+                        "${baseUrl.trimEnd('/')}$rawUrl"
+                    } else if (rawUrl.contains("localhost") || rawUrl.contains("127.0.0.1")) {
+                        val baseUri = try { java.net.URI(baseUrl) } catch (e: Exception) { null }
+                        if (baseUri != null && baseUri.host != null) {
+                            rawUrl.replace("localhost", baseUri.host).replace("127.0.0.1", baseUri.host)
+                        } else rawUrl
+                    } else {
+                        rawUrl
                     }
                     Result.success(ShareSessionInfo(sessionId = sessionId, shareUrl = shareUrl))
                 }

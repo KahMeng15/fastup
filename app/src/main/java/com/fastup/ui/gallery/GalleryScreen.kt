@@ -1,5 +1,6 @@
 package com.fastup.ui.gallery
 
+import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -12,14 +13,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -37,6 +37,7 @@ fun GalleryScreen(
     val photos by viewModel.photos.collectAsState()
     val curationMode by viewModel.curationViewMode.collectAsState()
     val isSyncingCuration by viewModel.isSyncingCuration.collectAsState()
+    var showShareFolderDialog by remember { mutableStateOf(false) }
     val displayedPhotos = if (curationMode == "curated") {
         photos.filter { it.isHero || it.burstGroupId == null }
     } else {
@@ -129,6 +130,55 @@ fun GalleryScreen(
             }
         }
 
+        // Lower Sub-header: Folder Name & Share Link Action
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 10.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF1E293B).copy(alpha = 0.6f))
+                .border(1.dp, Color(0xFF334155), RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.weight(1f, fill = false)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = Amber400,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = viewModel.sessionId.ifBlank { "Root" },
+                    color = Slate200,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+
+            FilledTonalButton(
+                onClick = { showShareFolderDialog = true },
+                shape = RoundedCornerShape(6.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = Blue600.copy(alpha = 0.25f),
+                    contentColor = Blue400
+                ),
+                modifier = Modifier.height(26.dp)
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(12.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Share Folder", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
         if (displayedPhotos.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -161,8 +211,12 @@ fun GalleryScreen(
                 }
             }
         } else {
+            val configuration = LocalConfiguration.current
+            val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            val columnsCount = if (isLandscape) 5 else 3
+
             LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
+                columns = GridCells.Fixed(columnsCount),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
@@ -187,6 +241,15 @@ fun GalleryScreen(
             onPhotoClick(photoId)
         }
     )
+
+    if (showShareFolderDialog) {
+        com.fastup.ui.share.ShareModalDialog(
+            title = "Folder: ${viewModel.sessionId}",
+            targetPhoto = null,
+            viewModel = viewModel,
+            onDismiss = { showShareFolderDialog = false }
+        )
+    }
 }
 
 @Composable

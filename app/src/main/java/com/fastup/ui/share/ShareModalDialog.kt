@@ -60,6 +60,7 @@ fun ShareModalDialog(
     val context = LocalContext.current
     var linksState by remember { mutableStateOf<DualShareLinks?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var isGeneratingHellomyphotos by remember { mutableStateOf(false) }
 
     // QR Code viewer state
     var qrModalUrl by remember { mutableStateOf<String?>(null) }
@@ -95,6 +96,59 @@ fun ShareModalDialog(
 
     LaunchedEffect(targetPhoto?.id, viewModel.sessionId) {
         refreshLinks()
+    }
+
+    fun handleHellomyphotosAction(openQr: Boolean) {
+        val existingUrl = linksState?.hellomyphotosUrl
+        if (!existingUrl.isNullOrBlank()) {
+            if (openQr) {
+                qrModalUrl = existingUrl
+                qrModalTitle = "Scan Hellomyphotos Link"
+            } else {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Hellomyphotos Link", existingUrl))
+                Toast.makeText(context, "Copied Hellomyphotos link!", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        // Generate on demand when user clicks Copy Link or Show QR
+        isGeneratingHellomyphotos = true
+        if (targetPhoto != null) {
+            viewModel.generatePhotoHellomyphotosLink(targetPhoto) { result ->
+                isGeneratingHellomyphotos = false
+                result.onSuccess { url ->
+                    linksState = linksState?.copy(hellomyphotosUrl = url)
+                    if (openQr) {
+                        qrModalUrl = url
+                        qrModalTitle = "Scan Hellomyphotos Link"
+                    } else {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Hellomyphotos Link", url))
+                        Toast.makeText(context, "Link generated & copied to clipboard!", Toast.LENGTH_SHORT).show()
+                    }
+                }.onFailure { err ->
+                    Toast.makeText(context, "Failed to generate link: ${err.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        } else {
+            viewModel.generateFolderHellomyphotosLink { result ->
+                isGeneratingHellomyphotos = false
+                result.onSuccess { url ->
+                    linksState = linksState?.copy(hellomyphotosUrl = url)
+                    if (openQr) {
+                        qrModalUrl = url
+                        qrModalTitle = "Scan Hellomyphotos Link"
+                    } else {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Hellomyphotos Link", url))
+                        Toast.makeText(context, "Link generated & copied to clipboard!", Toast.LENGTH_SHORT).show()
+                    }
+                }.onFailure { err ->
+                    Toast.makeText(context, "Failed to generate link: ${err.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     fun openGDriveSetup() {
@@ -236,23 +290,13 @@ fun ShareModalDialog(
                             serviceName = "Hellomyphotos Link",
                             serviceIcon = Icons.Default.Public,
                             accentColor = Color(0xFF38BDF8),
-                            badgeText = if (targetPhoto != null) "Single Photo" else "Live Gallery",
+                            badgeText = if (!linksState?.hellomyphotosUrl.isNullOrBlank()) (if (targetPhoto != null) "Single Photo" else "Live Gallery") else "On-Demand",
                             url = linksState?.hellomyphotosUrl,
                             isLoading = false,
-                            emptyMessage = "Share link not generated yet",
-                            onCopy = {
-                                linksState?.hellomyphotosUrl?.let { url ->
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    clipboard.setPrimaryClip(ClipData.newPlainText("Hellomyphotos Link", url))
-                                    Toast.makeText(context, "Copied Hellomyphotos link!", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            onShowQr = {
-                                linksState?.hellomyphotosUrl?.let { url ->
-                                    qrModalUrl = url
-                                    qrModalTitle = "Scan Hellomyphotos Link"
-                                }
-                            }
+                            isGenerating = isGeneratingHellomyphotos,
+                            emptyMessage = "Link not generated yet. Tap Copy Link or Show QR to generate.",
+                            onCopy = { handleHellomyphotosAction(openQr = false) },
+                            onShowQr = { handleHellomyphotosAction(openQr = true) }
                         )
 
                         // ==========================================
@@ -690,6 +734,7 @@ fun ShareCard(
     badgeText: String,
     url: String?,
     isLoading: Boolean = false,
+    isGenerating: Boolean = false,
     emptyMessage: String = "Link not available",
     onCopy: () -> Unit,
     onShowQr: () -> Unit
@@ -752,24 +797,41 @@ fun ShareCard(
                     CircularProgressIndicator(color = accentColor, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     Text("Loading link...", color = Slate400, fontSize = 12.sp)
                 }
-            } else if (!url.isNullOrBlank()) {
-                // Display URL Box
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Slate900)
-                        .border(1.dp, Slate700, RoundedCornerShape(8.dp))
-                        .padding(horizontal = 10.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = url,
-                        color = accentColor,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
+            } else {
+                if (!url.isNullOrBlank()) {
+                    // Display URL Box
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Slate900)
+                            .border(1.dp, Slate700, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = url,
+                            color = accentColor,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Slate900.copy(alpha = 0.6f))
+                            .border(1.dp, Slate700.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = emptyMessage,
+                            color = Slate400,
+                            fontSize = 12.sp
+                        )
+                    }
                 }
 
                 // Action Buttons: Copy Link & Show QR
@@ -779,6 +841,7 @@ fun ShareCard(
                 ) {
                     FilledTonalButton(
                         onClick = onCopy,
+                        enabled = !isGenerating,
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.filledTonalButtonColors(
                             containerColor = Slate700,
@@ -786,13 +849,20 @@ fun ShareCard(
                         ),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Copy Link", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        if (isGenerating) {
+                            CircularProgressIndicator(color = Slate200, modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Generating...", fontSize = 12.sp)
+                        } else {
+                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Copy Link", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
 
                     Button(
                         onClick = onShowQr,
+                        enabled = !isGenerating,
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = accentColor,
@@ -800,17 +870,17 @@ fun ShareCard(
                         ),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Default.QrCode, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Show QR", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        if (isGenerating) {
+                            CircularProgressIndicator(color = Color.Black, modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Generating...", fontSize = 12.sp)
+                        } else {
+                            Icon(Icons.Default.QrCode, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Show QR", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
-            } else {
-                Text(
-                    text = emptyMessage,
-                    color = Slate500,
-                    fontSize = 12.sp
-                )
             }
         }
     }

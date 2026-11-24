@@ -283,3 +283,6 @@ If the USB tests succeed, this is the architecture I recommend.
 - [x] **Verification**:
   - `hellomyphotos/backend` TypeScript check passing with 0 errors (`npx tsc --noEmit`).
   - `fastup` Android debug APK successfully compiled and packaged (`./gradlew assembleDebug` passing).
+  - Added dedicated lower sub-header in `GalleryScreen.kt` displaying current folder name with 1-tap "Share Folder" action.
+  - Implemented strictly on-demand generation for Hellomyphotos links: links are no longer eagerly created on opening the dialog; they are generated on-the-fly when the user explicitly clicks "Copy Link" or "Show QR".
+  - Installed and verified live on connected Samsung Galaxy A52s device.

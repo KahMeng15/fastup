@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -26,13 +27,14 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -48,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 import com.fastup.model.CameraConnectionState
 import com.fastup.model.LiveViewerMode
 import com.fastup.model.PhotoItem
@@ -196,127 +200,34 @@ fun DashboardScreen(
         isHeaderVisible = false
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(PureBlack)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) {
-                lastInteractionTimestamp = System.currentTimeMillis()
-                isHeaderVisible = true
-            },
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        // 1. Heading (Always visible, does not time out)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp)
-                .padding(top = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "FastUp Dashboard",
-                color = Slate100,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold
-            )
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-            FilledTonalButton(
-                onClick = { showShareDialog = true },
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = Blue600.copy(alpha = 0.25f),
-                    contentColor = Blue400
-                ),
-                modifier = Modifier.height(30.dp)
-            ) {
-                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Share Event", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            }
+    @Composable
+    fun CameraViewfinder(modifier: Modifier = Modifier) {
+        val frameBitmap = remember(liveViewBitmap) { liveViewBitmap?.asImageBitmap() }
+        val liveViewAspect = if (frameBitmap != null && frameBitmap.height > 0) {
+            frameBitmap.width.toFloat() / frameBitmap.height.toFloat()
+        } else {
+            3f / 2f
         }
 
-        // 2. View finder / Quick preview (Full available width, edge-to-edge with no rounded corners or border)
-        if (liveViewerMode == LiveViewerMode.INSTANT_CAPTURE && latestPhoto != null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(3f / 2f)
-                    .background(Color.Black)
-                    .clickable {
-                        lastInteractionTimestamp = System.currentTimeMillis()
-                        onPhotoClick(latestPhoto.id)
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                AsyncImage(
-                    model = latestPhoto.displayFile,
-                    contentDescription = "Latest Photo Preview",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize()
-                )
-
-                // Top Bar Overlay
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = isHeaderVisible,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
-                    modifier = Modifier.align(Alignment.TopCenter)
+        Box(
+            modifier = modifier
+                .background(Color.Black)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.55f))
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "LATEST CAPTURE: ${latestPhoto.fileName}",
-                            color = Slate100,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-
-                        Text(
-                            text = "Tap to inspect",
-                            color = Slate300,
-                            fontSize = 10.sp
-                        )
+                    lastInteractionTimestamp = System.currentTimeMillis()
+                    isHeaderVisible = !isHeaderVisible
+                    if (liveViewerMode == LiveViewerMode.INSTANT_CAPTURE && latestPhoto != null) {
+                        onPhotoClick(latestPhoto.id)
                     }
-                }
-            }
-        } else if (liveViewerMode == LiveViewerMode.LIVE_VIEWFINDER) {
-            val frameBitmap = remember(liveViewBitmap) {
-                liveViewBitmap?.asImageBitmap()
-            }
-            val liveViewAspect = if (frameBitmap != null && frameBitmap.height > 0) {
-                frameBitmap.width.toFloat() / frameBitmap.height.toFloat()
-            } else {
-                3f / 2f
-            }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(liveViewAspect)
-                    .background(Color.Black)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        lastInteractionTimestamp = System.currentTimeMillis()
-                        isHeaderVisible = !isHeaderVisible
-                    },
-                contentAlignment = Alignment.Center
-            ) {
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            if (liveViewerMode == LiveViewerMode.LIVE_VIEWFINDER) {
                 if (frameBitmap != null) {
                     Image(
                         bitmap = frameBitmap,
@@ -408,10 +319,96 @@ fun DashboardScreen(
                         }
                     }
                 }
+            } else if (liveViewerMode == LiveViewerMode.INSTANT_CAPTURE) {
+                if (latestPhoto != null) {
+                    AsyncImage(
+                        model = latestPhoto.displayFile,
+                        contentDescription = "Latest Photo Preview",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Top Bar Overlay
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = isHeaderVisible,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier.align(Alignment.TopCenter)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.Black.copy(alpha = 0.55f))
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "LATEST CAPTURE: ${latestPhoto.fileName}",
+                                color = Slate100,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+
+                            Text(
+                                text = "Tap to inspect",
+                                color = Slate300,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = null,
+                            tint = Slate600,
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Waiting for first capture...",
+                            color = Slate400,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.VideocamOff,
+                        contentDescription = null,
+                        tint = Slate600,
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Live Viewer Disabled",
+                        color = Slate400,
+                        fontSize = 12.sp
+                    )
+                }
             }
         }
+    }
 
-        // 3. Status Cards (Local Transfer & Upload Pipeline)
+    @Composable
+    fun ColumnScope.DashboardControlsContent(isLandscapeLayout: Boolean) {
         val (cameraStatusText, cameraStatusColor) = when (cameraState) {
             CameraConnectionState.CONNECTED -> Pair("Ready", Emerald500)
             CameraConnectionState.CAPTURING -> Pair("Capturing", Amber500)
@@ -438,73 +435,154 @@ fun DashboardScreen(
             }
         }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Box(modifier = Modifier.weight(1f)) {
-                TransferPipelineCard(
-                    title = "Local Transfer",
-                    icon = Icons.Default.Download,
-                    statusText = cameraStatusText,
-                    statusColor = cameraStatusColor,
-                    onStatusClick = {
-                        viewModel.reconnectCamera()
-                        Toast.makeText(context, "Scanning for camera...", Toast.LENGTH_SHORT).show()
-                    },
-                    speedFormatted = deviceStats.speedFormatted,
-                    isActive = deviceStats.speedBps > 0L,
-                    progress = deviceStats.overallProgress,
-                    counter1 = Pair("Captured", deviceStats.totalCaptured.toString()),
-                    counter2 = Pair("Pending", deviceStats.pendingTransfer.toString()),
-                    counter3 = Pair("Done", deviceStats.completedTransfer.toString()),
-                    counter4 = Pair("Failed", deviceStats.failedTransfer.toString()),
-                    detailLabel = "Camera",
-                    detailValue = cameraDetail,
-                    fact1 = Pair("Used", storageFacts.localUsedFormatted),
-                    fact2 = Pair("Free", storageFacts.localFreeFormatted)
-                )
-            }
-            Box(modifier = Modifier.weight(1f)) {
-                TransferPipelineCard(
-                    title = "Upload Pipeline",
-                    icon = Icons.Default.CloudUpload,
-                    badge = if (isUploadPaused) "PAUSED" else null,
-                    statusText = serverStatusText,
-                    statusColor = serverStatusColor,
-                    onStatusClick = {
-                        viewModel.checkServerConnection()
-                        Toast.makeText(context, "Checking server connection...", Toast.LENGTH_SHORT).show()
-                    },
-                    speedFormatted = stats.speedFormatted,
-                    isActive = isUploading,
-                    progress = stats.overallProgress,
-                    counter1 = Pair("Total", stats.totalPhotos.toString()),
-                    counter2 = Pair("Pending", stats.pendingCount.toString()),
-                    counter3 = Pair("Uploaded", stats.completedCount.toString()),
-                    counter4 = Pair("Failed", stats.failedCount.toString()),
-                    detailLabel = "Host",
-                    detailValue = serverHostDisplay,
-                    fact1 = Pair("Up", storageFacts.uploadedSizeFormatted),
-                    fact2 = Pair("Free", storageFacts.serverAvailableFormatted),
-                    onFailedClick = if (stats.failedCount > 0) { { viewModel.retryFailed() } } else null
-                )
-            }
-        }
-
-        // Device & Network Telemetry Card (Unified card matching TransferPipelineCard styling)
         val phoneBatteryColor = when {
             phoneBatteryLevel > 20 -> Emerald500
             phoneBatteryLevel > 10 -> Amber500
             else -> Rose500
         }
 
+        // 1. Heading
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = if (isLandscapeLayout) 4.dp else 12.dp)
+                .padding(top = if (isLandscapeLayout) 4.dp else 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "FastUp Dashboard",
+                color = Slate100,
+                fontSize = if (isLandscapeLayout) 17.sp else 20.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            FilledTonalButton(
+                onClick = { showShareDialog = true },
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = Blue600.copy(alpha = 0.25f),
+                    contentColor = Blue400
+                ),
+                modifier = Modifier.height(28.dp)
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(13.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Share Event", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        // 2. Status Cards (Local Transfer & Upload Pipeline)
+        if (isLandscapeLayout) {
+            TransferPipelineCard(
+                title = "Local Transfer",
+                icon = Icons.Default.Download,
+                statusText = cameraStatusText,
+                statusColor = cameraStatusColor,
+                onStatusClick = {
+                    viewModel.reconnectCamera()
+                    Toast.makeText(context, "Scanning for camera...", Toast.LENGTH_SHORT).show()
+                },
+                speedFormatted = deviceStats.speedFormatted,
+                isActive = deviceStats.speedBps > 0L,
+                progress = deviceStats.overallProgress,
+                counter1 = Pair("Captured", deviceStats.totalCaptured.toString()),
+                counter2 = Pair("Pending", deviceStats.pendingTransfer.toString()),
+                counter3 = Pair("Done", deviceStats.completedTransfer.toString()),
+                counter4 = Pair("Failed", deviceStats.failedTransfer.toString()),
+                detailLabel = "Camera",
+                detailValue = cameraDetail,
+                fact1 = Pair("Used", storageFacts.localUsedFormatted),
+                fact2 = Pair("Free", storageFacts.localFreeFormatted)
+            )
+
+            TransferPipelineCard(
+                title = "Upload Pipeline",
+                icon = Icons.Default.CloudUpload,
+                badge = if (isUploadPaused) "PAUSED" else null,
+                statusText = serverStatusText,
+                statusColor = serverStatusColor,
+                onStatusClick = {
+                    viewModel.checkServerConnection()
+                    Toast.makeText(context, "Checking server connection...", Toast.LENGTH_SHORT).show()
+                },
+                speedFormatted = stats.speedFormatted,
+                isActive = isUploading,
+                progress = stats.overallProgress,
+                counter1 = Pair("Total", stats.totalPhotos.toString()),
+                counter2 = Pair("Pending", stats.pendingCount.toString()),
+                counter3 = Pair("Uploaded", stats.completedCount.toString()),
+                counter4 = Pair("Failed", stats.failedCount.toString()),
+                detailLabel = "Host",
+                detailValue = serverHostDisplay,
+                fact1 = Pair("Up", storageFacts.uploadedSizeFormatted),
+                fact2 = Pair("Free", storageFacts.serverAvailableFormatted),
+                onFailedClick = if (stats.failedCount > 0) { { viewModel.retryFailed() } } else null
+            )
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    TransferPipelineCard(
+                        title = "Local Transfer",
+                        icon = Icons.Default.Download,
+                        statusText = cameraStatusText,
+                        statusColor = cameraStatusColor,
+                        onStatusClick = {
+                            viewModel.reconnectCamera()
+                            Toast.makeText(context, "Scanning for camera...", Toast.LENGTH_SHORT).show()
+                        },
+                        speedFormatted = deviceStats.speedFormatted,
+                        isActive = deviceStats.speedBps > 0L,
+                        progress = deviceStats.overallProgress,
+                        counter1 = Pair("Captured", deviceStats.totalCaptured.toString()),
+                        counter2 = Pair("Pending", deviceStats.pendingTransfer.toString()),
+                        counter3 = Pair("Done", deviceStats.completedTransfer.toString()),
+                        counter4 = Pair("Failed", deviceStats.failedTransfer.toString()),
+                        detailLabel = "Camera",
+                        detailValue = cameraDetail,
+                        fact1 = Pair("Used", storageFacts.localUsedFormatted),
+                        fact2 = Pair("Free", storageFacts.localFreeFormatted)
+                    )
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    TransferPipelineCard(
+                        title = "Upload Pipeline",
+                        icon = Icons.Default.CloudUpload,
+                        badge = if (isUploadPaused) "PAUSED" else null,
+                        statusText = serverStatusText,
+                        statusColor = serverStatusColor,
+                        onStatusClick = {
+                            viewModel.checkServerConnection()
+                            Toast.makeText(context, "Checking server connection...", Toast.LENGTH_SHORT).show()
+                        },
+                        speedFormatted = stats.speedFormatted,
+                        isActive = isUploading,
+                        progress = stats.overallProgress,
+                        counter1 = Pair("Total", stats.totalPhotos.toString()),
+                        counter2 = Pair("Pending", stats.pendingCount.toString()),
+                        counter3 = Pair("Uploaded", stats.completedCount.toString()),
+                        counter4 = Pair("Failed", stats.failedCount.toString()),
+                        detailLabel = "Host",
+                        detailValue = serverHostDisplay,
+                        fact1 = Pair("Up", storageFacts.uploadedSizeFormatted),
+                        fact2 = Pair("Free", storageFacts.serverAvailableFormatted),
+                        onFailedClick = if (stats.failedCount > 0) { { viewModel.retryFailed() } } else null
+                    )
+                }
+            }
+        }
+
+        // 3. Telemetry Card
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp),
+                .padding(horizontal = if (isLandscapeLayout) 0.dp else 12.dp),
             colors = CardDefaults.cardColors(containerColor = DarkSurface),
             shape = RoundedCornerShape(10.dp),
             border = BorderStroke(1.dp, DarkBorder)
@@ -515,12 +593,10 @@ fun DashboardScreen(
                     .padding(horizontal = 10.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Section 1: Network Strength
                 Column(
                     modifier = Modifier
                         .weight(1.1f)
-                        .padding(end = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                        .padding(end = 8.dp)
                 ) {
                     Text(
                         text = "NETWORK",
@@ -541,7 +617,6 @@ fun DashboardScreen(
                     )
                 }
 
-                // Vertical Divider
                 Box(
                     modifier = Modifier
                         .width(1.dp)
@@ -549,12 +624,10 @@ fun DashboardScreen(
                         .background(DarkBorder)
                 )
 
-                // Section 2: Mobile Device Battery
                 Column(
                     modifier = Modifier
                         .weight(0.9f)
-                        .padding(start = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                        .padding(start = 12.dp)
                 ) {
                     Text(
                         text = "PHONE BATT",
@@ -576,13 +649,21 @@ fun DashboardScreen(
             }
         }
 
-        // 4. Recent Captures Grid Section filling remaining free space
-        Column(
-            modifier = Modifier
+        // 4. Recent Captures Section
+        val capturesModifier = if (isLandscapeLayout) {
+            Modifier
+                .fillMaxWidth()
+                .padding(bottom = 6.dp)
+        } else {
+            Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp)
                 .padding(bottom = 6.dp)
-                .weight(1f),
+                .weight(1f)
+        }
+
+        Column(
+            modifier = capturesModifier,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
@@ -594,7 +675,7 @@ fun DashboardScreen(
                     text = "Recent Captures",
                     color = Slate100,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 15.sp
+                    fontSize = 14.sp
                 )
                 Text(
                     text = "${photos.size} total",
@@ -607,34 +688,48 @@ fun DashboardScreen(
             if (photos.isEmpty()) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
+                        .fillMaxWidth()
+                        .height(if (isLandscapeLayout) 100.dp else 160.dp)
                         .background(DarkSurface, RoundedCornerShape(12.dp))
                         .border(1.dp, DarkBorder, RoundedCornerShape(12.dp))
-                        .padding(24.dp),
+                        .padding(16.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.CameraAlt,
                             contentDescription = null,
                             tint = Slate600,
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(32.dp)
                         )
                         Text(
                             text = "No photos captured yet",
                             color = Slate400,
-                            fontSize = 14.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
                         )
-                        Text(
-                            text = "Photos captured via USB tethering will appear here instantly.",
-                            color = Slate500,
-                            fontSize = 12.sp,
-                            textAlign = TextAlign.Center
-                        )
+                    }
+                }
+            } else if (isLandscapeLayout) {
+                photos.take(8).chunked(2).forEach { rowPhotos ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        rowPhotos.forEach { photo ->
+                            Box(modifier = Modifier.weight(1f)) {
+                                PhotoGridItem(
+                                    photo = photo,
+                                    onClick = { onPhotoClick(photo.id) }
+                                )
+                            }
+                        }
+                        if (rowPhotos.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
                     }
                 }
             } else {
@@ -652,6 +747,55 @@ fun DashboardScreen(
                     }
                 }
             }
+        }
+    }
+
+    if (isLandscape) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(PureBlack)
+        ) {
+            // Left Side: Live Viewfinder / Preview (Native 3:2 camera aspect ratio, full height!)
+            CameraViewfinder(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(3f / 2f, matchHeightConstraintsFirst = true)
+            )
+
+            // Right Side: Everything else (scrollable column)
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                DashboardControlsContent(isLandscapeLayout = true)
+            }
+        }
+    } else {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(PureBlack)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    lastInteractionTimestamp = System.currentTimeMillis()
+                    isHeaderVisible = true
+                },
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            CameraViewfinder(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(3f / 2f)
+            )
+
+            DashboardControlsContent(isLandscapeLayout = false)
         }
     }
 

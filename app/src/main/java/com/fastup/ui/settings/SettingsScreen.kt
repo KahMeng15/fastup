@@ -43,7 +43,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val localFolders by viewModel.localFolders.collectAsState()
     val photographerName by viewModel.photographerName.collectAsState()
     val targetFolder by viewModel.currentSessionId.collectAsState()
-    val shareSession by viewModel.shareSession.collectAsState()
     val currentViewerMode by viewModel.liveViewerMode.collectAsState()
     val photos by viewModel.photos.collectAsState()
     val failedCount = remember(photos) { photos.count { it.status == com.fastup.model.UploadStatus.FAILED } }
@@ -54,9 +53,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var showClearDialog by remember { mutableStateOf(false) }
     var showPairDialog by remember { mutableStateOf(false) }
     var showFolderDialog by remember { mutableStateOf(false) }
-    var showSettingsShareDialog by remember { mutableStateOf(false) }
-    var sessionNameInput by remember(targetFolder) { mutableStateOf(targetFolder) }
-    var isGeneratingShare by remember { mutableStateOf(false) }
     var pairOtpCode by remember { mutableStateOf("") }
     var isPairing by remember { mutableStateOf(false) }
     var pairErrorMessage by remember { mutableStateOf<String?>(null) }
@@ -277,118 +273,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 viewModel = viewModel,
                 onDismiss = { showFolderDialog = false }
             )
-        }
-
-        // Session & On-Demand Share Link Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Slate800),
-            shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, Slate700)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = "Event Session & Guest Share",
-                    color = Slate100,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp
-                )
-
-                OutlinedTextField(
-                    value = sessionNameInput,
-                    onValueChange = {
-                        sessionNameInput = it
-                        viewModel.sessionId = it
-                    },
-                    label = { Text("Session Name / Event ID", color = Slate400) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Slate100,
-                        unfocusedTextColor = Slate100,
-                        focusedBorderColor = Blue500,
-                        unfocusedBorderColor = Slate600
-                    ),
-                    singleLine = true
-                )
-
-                Button(
-                    onClick = { showSettingsShareDialog = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = Blue600),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Share Links & Cloud Sync (Hellomyphotos & GDrive)")
-                }
-
-                // Share link display with QR code
-                AnimatedVisibility(visible = shareSession != null) {
-                    shareSession?.let { session ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Slate900, RoundedCornerShape(12.dp))
-                                .padding(12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Text(
-                                text = "Guest Live Gallery URL",
-                                color = Slate400,
-                                fontSize = 12.sp
-                            )
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = session.shareUrl,
-                                    color = Emerald500,
-                                    fontWeight = FontWeight.Medium,
-                                    fontSize = 13.sp,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                IconButton(onClick = {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    clipboard.setPrimaryClip(ClipData.newPlainText("Share Link", session.shareUrl))
-                                    Toast.makeText(context, "Copied share link to clipboard!", Toast.LENGTH_SHORT).show()
-                                }) {
-                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Slate100)
-                                }
-                            }
-
-                            // Dynamic QR code preview
-                            val qrBitmap = remember(session.shareUrl) {
-                                QrCodeUtil.generateQrCodeBitmap(session.shareUrl, 400)
-                            }
-
-                            qrBitmap?.let { bitmap ->
-                                Box(
-                                    modifier = Modifier
-                                        .size(180.dp)
-                                        .background(Color.White, RoundedCornerShape(8.dp))
-                                        .padding(8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Image(
-                                        bitmap = bitmap,
-                                        contentDescription = "Share QR Code",
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         // Live Viewer / Preview Mode Card
@@ -1311,15 +1195,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 },
                 containerColor = Slate800,
                 shape = RoundedCornerShape(16.dp)
-            )
-        }
-
-        if (showSettingsShareDialog) {
-            com.fastup.ui.share.ShareModalDialog(
-                title = "Folder: ${viewModel.sessionId}",
-                targetPhoto = null,
-                viewModel = viewModel,
-                onDismiss = { showSettingsShareDialog = false }
             )
         }
     }

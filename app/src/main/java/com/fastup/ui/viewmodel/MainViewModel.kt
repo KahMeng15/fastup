@@ -461,18 +461,12 @@ class MainViewModel : ViewModel() {
 
     fun fetchFolderShareLinks(onResult: (DualShareLinks) -> Unit) {
         viewModelScope.launch {
-            var hellomyphotosLink: String? = null
+            val existingShare = uploadManager.shareSession.value?.takeIf { it.sessionId == sessionId }?.shareUrl
             var gdriveLink: String? = null
             var isSynced = false
             var gdriveStatus = "NOT_INITIALIZED"
 
-            // 1. Fetch Hellomyphotos folder share link
-            val shareRes = uploadManager.apiClient.createShareLink(sessionId)
-            shareRes.onSuccess {
-                hellomyphotosLink = it.shareUrl
-            }
-
-            // 2. Fetch Google Drive folder sync info
+            // 1. Check Google Drive folder sync info (pure read query, does not generate links)
             val gdriveRes = uploadManager.apiClient.fetchFolderGDriveSync(sessionId)
             gdriveRes.onSuccess { info ->
                 if (info.synced && info.sync != null) {
@@ -487,7 +481,7 @@ class MainViewModel : ViewModel() {
 
             val result = DualShareLinks(
                 title = "Folder: $sessionId",
-                hellomyphotosUrl = hellomyphotosLink,
+                hellomyphotosUrl = existingShare,
                 gdriveUrl = gdriveLink,
                 isGDriveSynced = isSynced,
                 gdriveStatus = gdriveStatus,
@@ -499,9 +493,20 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    fun generateFolderHellomyphotosLink(onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            val res = uploadManager.apiClient.createShareLink(sessionId)
+            res.onSuccess { info ->
+                uploadManager.generateShareLink { /* updates shareSession */ }
+            }
+            withContext(Dispatchers.Main) {
+                onResult(res.map { it.shareUrl })
+            }
+        }
+    }
+
     fun fetchPhotoShareLinks(photo: PhotoItem, onResult: (DualShareLinks) -> Unit) {
         viewModelScope.launch {
-            var hellomyphotosLink: String? = null
             var gdriveLink: String? = null
             var isSynced = false
             var gdriveStatus = "NOT_INITIALIZED"
@@ -524,13 +529,7 @@ class MainViewModel : ViewModel() {
             }
 
             if (mediaId != null) {
-                // 1. Create or fetch single photo share link on Hellomyphotos
-                val shareRes = uploadManager.apiClient.createMediaShareLink(sessionId, mediaId)
-                shareRes.onSuccess {
-                    hellomyphotosLink = it.shareUrl
-                }
-
-                // 2. Check Google Drive sync for this specific photo
+                // Check Google Drive sync for this specific photo
                 if (folderIsSynced) {
                     val mediaGdriveRes = uploadManager.apiClient.fetchMediaGDriveLink(mediaId)
                     mediaGdriveRes.onSuccess { mLink ->
@@ -554,7 +553,7 @@ class MainViewModel : ViewModel() {
 
             val result = DualShareLinks(
                 title = photo.fileName,
-                hellomyphotosUrl = hellomyphotosLink,
+                hellomyphotosUrl = null, // Generate on-demand when user clicks Copy Link or Show QR
                 gdriveUrl = gdriveLink,
                 isGDriveSynced = isSynced,
                 gdriveStatus = gdriveStatus,
@@ -563,6 +562,34 @@ class MainViewModel : ViewModel() {
             )
             withContext(Dispatchers.Main) {
                 onResult(result)
+            }
+        }
+    }
+
+    fun generatePhotoHellomyphotosLink(photo: PhotoItem, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            var mediaId = photo.serverMediaId
+            if (mediaId == null) {
+                val serverPhotos = uploadManager.apiClient.fetchSessionPhotos(sessionId, view = "all")
+                val matched = serverPhotos.find {
+                    it.fileName.equals(photo.fileName, ignoreCase = true) ||
+                            it.fileName.equals(photo.fileName.replace(Regex("\\.arw$", RegexOption.IGNORE_CASE), ".jpg"), ignoreCase = true)
+                }
+                if (matched != null) {
+                    mediaId = matched.id
+                }
+            }
+
+            if (mediaId == null) {
+                withContext(Dispatchers.Main) {
+                    onResult(Result.failure(Exception("Photo must be uploaded to server before generating a share link")))
+                }
+                return@launch
+            }
+
+            val res = uploadManager.apiClient.createMediaShareLink(sessionId, mediaId)
+            withContext(Dispatchers.Main) {
+                onResult(res.map { it.shareUrl })
             }
         }
     }
