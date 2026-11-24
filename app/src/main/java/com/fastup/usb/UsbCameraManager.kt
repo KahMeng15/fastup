@@ -82,6 +82,25 @@ class UsbCameraManager(
     private var liveViewJob: Job? = null
     @Volatile private var isLiveViewPausedForCapture = false
     @Volatile private var lastCaptureTimeMs = 0L
+    private val pendingCaptureCount = java.util.concurrent.atomic.AtomicInteger(0)
+    private var quietPeriodJob: Job? = null
+
+    private fun scheduleLiveViewResume(delayMs: Long = 2500L) {
+        quietPeriodJob?.cancel()
+        quietPeriodJob = scope.launch {
+            delay(delayMs)
+            val elapsed = System.currentTimeMillis() - lastCaptureTimeMs
+            if (elapsed >= (delayMs - 200) &&
+                pendingCaptureCount.get() == 0 &&
+                photoChannel.isEmpty &&
+                !transferMutex.isLocked &&
+                _connectionState.value == CameraConnectionState.CONNECTED
+            ) {
+                isLiveViewPausedForCapture = false
+                Log.i(TAG, "Camera SD write idle; Live View & background queries resumed cleanly.")
+            }
+        }
+    }
 
     fun startLiveView() {
         if (_isLiveViewStreaming.value || liveViewJob?.isActive == true) return
@@ -184,6 +203,21 @@ class UsbCameraManager(
                     }
                     Log.i(TAG, "USB device detached: ${device?.deviceName}")
                     disconnect()
+
+                    // Production safeguard: Auto-reconnect poll after unexpected disconnect/reboot
+                    scope.launch {
+                        for (attempt in 1..10) {
+                            delay(1000)
+                            if (_connectionState.value == CameraConnectionState.CONNECTED) break
+                            val devices = usbManager.deviceList
+                            val cam = devices.values.find { isSonyCamera(it) }
+                            if (cam != null) {
+                                Log.i(TAG, "Auto-recovery: found Sony camera after detach on attempt $attempt, connecting...")
+                                checkAndConnect(cam)
+                                break
+                            }
+                        }
+                    }
                 }
                 ACTION_TRIGGER_CAPTURE -> {
                     // Triggered via: adb shell am broadcast -a com.fastup.TRIGGER_CAPTURE -n com.fastup/.usb.CaptureReceiver
@@ -440,6 +474,8 @@ class UsbCameraManager(
 
                     if (isPhotoEvent) {
                         isLiveViewPausedForCapture = true
+                        quietPeriodJob?.cancel() // cancel pending resumption if a new photo event arrived
+                        pendingCaptureCount.incrementAndGet()
                         val targetHandle = if (handle != null && handle != 0 && handle != -1) {
                             handle
                         } else {
@@ -450,6 +486,11 @@ class UsbCameraManager(
                         // 0xC202 is Sony SDIE_ObjectRemoved indicating the camera RAM has retired the previous object.
                         // Do NOT send to photoChannel! A second spurious drain request will crash the camera while it writes to SD.
                         Log.i(TAG, "Sony Camera confirmed object retired from RAM (0xC202)")
+                        // Trigger adaptive recovery: give 2000ms after RAM retirement for SD write to complete
+                        lastCaptureTimeMs = System.currentTimeMillis()
+                        if (pendingCaptureCount.get() <= 0 && photoChannel.isEmpty) {
+                            scheduleLiveViewResume(2000L)
+                        }
                     }
                 }
             }
@@ -579,20 +620,16 @@ class UsbCameraManager(
                 }
             } finally {
                 lastCaptureTimeMs = System.currentTimeMillis()
+                val remaining = pendingCaptureCount.decrementAndGet()
                 com.fastup.FastUpApp.instance.uploadManager.refreshLocalFolders()
                 if (_connectionState.value == CameraConnectionState.CAPTURING) {
                     _connectionState.value = CameraConnectionState.CONNECTED
                 }
-                // Allow generous quiet time (8000ms) for camera to finish flushing JPEG clusters
-                // to SD card before resuming ANY PTP traffic (live view + interrupt poll).
-                // The eventJob interrupt poll is gated by isLiveViewPausedForCapture, so this
-                // window covers BOTH live view and the interrupt endpoint.
-                scope.launch {
-                    delay(8000)
-                    val elapsed = System.currentTimeMillis() - lastCaptureTimeMs
-                    if (elapsed >= 7800 && photoChannel.isEmpty && !transferMutex.isLocked && _connectionState.value == CameraConnectionState.CONNECTED) {
-                        isLiveViewPausedForCapture = false
-                    }
+                // Adaptive quiet window:
+                // If there are more captures queued in a burst, keep live view paused.
+                // When queue is drained, wait 2500ms safety window after the last download completes.
+                if (remaining <= 0 && photoChannel.isEmpty) {
+                    scheduleLiveViewResume(2500L)
                 }
             }
         }
