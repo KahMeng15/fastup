@@ -32,6 +32,7 @@ fun ServerFolderDialog(
     val context = LocalContext.current
     val currentFolder by viewModel.currentSessionId.collectAsState()
     val serverFolders by viewModel.serverFolders.collectAsState()
+    val scopes by viewModel.scopes.collectAsState()
     val isLoading by viewModel.isLoadingFolders.collectAsState()
 
     // Navigation state: current directory path in the browser
@@ -39,6 +40,9 @@ fun ServerFolderDialog(
     var selectedTarget by remember(currentFolder) { mutableStateOf(currentFolder) }
     var newFolderName by remember { mutableStateOf("") }
     var isCreating by remember { mutableStateOf(false) }
+
+    val isCurrentWritable = viewModel.isFolderWritable(currentNavPath)
+    val isTargetWritable = viewModel.isFolderWritable(selectedTarget)
 
     LaunchedEffect(Unit) {
         viewModel.loadServerFolders()
@@ -111,6 +115,34 @@ fun ServerFolderDialog(
                     }
                 }
 
+                // Scope banner if photographer is restricted to specific folders
+                if (scopes.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Emerald500.copy(alpha = 0.12f))
+                            .border(1.dp, Emerald500.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Shield,
+                            contentDescription = null,
+                            tint = Emerald400,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = "Allowed Scope: ${scopes.joinToString(", ")}",
+                            color = Emerald400,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 2
+                        )
+                    }
+                }
+
                 HorizontalDivider(color = Slate700)
 
                 // Breadcrumb & Up Navigation Bar
@@ -168,18 +200,29 @@ fun ServerFolderDialog(
                 }
 
                 // Current Directory Selection Card
+                val isCurrentSelected = selectedTarget == currentNavPath && isTargetWritable
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(10.dp))
-                        .background(if (selectedTarget == currentNavPath) Blue600.copy(alpha = 0.2f) else Slate900)
+                        .background(
+                            if (!isCurrentWritable) Slate900.copy(alpha = 0.5f)
+                            else if (isCurrentSelected) Blue600.copy(alpha = 0.2f)
+                            else Slate900
+                        )
                         .border(
-                            width = if (selectedTarget == currentNavPath) 1.5.dp else 1.dp,
-                            color = if (selectedTarget == currentNavPath) Blue500 else Slate700,
+                            width = if (isCurrentSelected) 1.5.dp else 1.dp,
+                            color = if (!isCurrentWritable) Slate700.copy(alpha = 0.5f)
+                            else if (isCurrentSelected) Blue500
+                            else Slate700,
                             shape = RoundedCornerShape(10.dp)
                         )
                         .clickable {
-                            selectedTarget = currentNavPath
+                            if (isCurrentWritable) {
+                                selectedTarget = currentNavPath
+                            } else {
+                                Toast.makeText(context, "Root or parent folders are outside your permitted upload scope (read-only navigation)", Toast.LENGTH_SHORT).show()
+                            }
                         }
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -191,32 +234,47 @@ fun ServerFolderDialog(
                         modifier = Modifier.weight(1f)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.FolderOpen,
+                            imageVector = if (!isCurrentWritable) Icons.Default.Lock else Icons.Default.FolderOpen,
                             contentDescription = null,
-                            tint = if (selectedTarget == currentNavPath) Blue400 else Slate300,
+                            tint = if (!isCurrentWritable) Slate500 else if (isCurrentSelected) Blue400 else Slate300,
                             modifier = Modifier.size(20.dp)
                         )
                         Column {
                             val currentDisplayName: String = if (currentNavPath.isEmpty()) "(Root)" else currentNavPath.substringAfterLast('/')
                             Text(
                                 text = "Current: $currentDisplayName",
-                                color = Slate100,
+                                color = if (!isCurrentWritable) Slate400 else Slate100,
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 13.sp
                             )
                             Text(
-                                text = if (selectedTarget == currentNavPath) "✓ Selected as upload destination" else "Tap to choose this folder",
-                                color = if (selectedTarget == currentNavPath) Emerald400 else Slate500,
+                                text = if (!isCurrentWritable) {
+                                    "🔒 Root / parent folder (Read-only navigation)"
+                                } else if (isCurrentSelected) {
+                                    "✓ Selected as upload destination"
+                                } else {
+                                    "Tap to choose this folder"
+                                },
+                                color = if (!isCurrentWritable) Amber400 else if (isCurrentSelected) Emerald400 else Slate500,
                                 fontSize = 11.sp
                             )
                         }
                     }
 
-                    RadioButton(
-                        selected = selectedTarget == currentNavPath,
-                        onClick = { selectedTarget = currentNavPath },
-                        colors = RadioButtonDefaults.colors(selectedColor = Blue500)
-                    )
+                    if (isCurrentWritable) {
+                        RadioButton(
+                            selected = isCurrentSelected,
+                            onClick = { selectedTarget = currentNavPath },
+                            colors = RadioButtonDefaults.colors(selectedColor = Blue500)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = "Read-only",
+                            tint = Slate500,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
 
                 // Subfolders List
@@ -237,7 +295,7 @@ fun ServerFolderDialog(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = if (isLoading) "Loading server folders..." else "No subfolders here. You can create one below or select this folder.",
+                            text = if (isLoading) "Loading server folders..." else if (isCurrentWritable) "No subfolders here. You can create one below or select this folder." else "No subfolders here.",
                             color = Slate500,
                             fontSize = 12.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -252,7 +310,8 @@ fun ServerFolderDialog(
                     ) {
                         items(childFolders) { folderName ->
                             val fullSubPath = if (currentNavPath.isEmpty()) folderName else "$currentNavPath/$folderName"
-                            val isSelected = selectedTarget == fullSubPath
+                            val isChildWritable = viewModel.isFolderWritable(fullSubPath)
+                            val isSelected = selectedTarget == fullSubPath && isTargetWritable
 
                             Row(
                                 modifier = Modifier
@@ -279,17 +338,26 @@ fun ServerFolderDialog(
                                     modifier = Modifier.weight(1f)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Folder,
+                                        imageVector = if (isChildWritable) Icons.Default.Folder else Icons.Default.FolderShared,
                                         contentDescription = null,
-                                        tint = if (isSelected) Blue400 else Slate400,
+                                        tint = if (isSelected) Blue400 else if (isChildWritable) Emerald400 else Slate500,
                                         modifier = Modifier.size(20.dp)
                                     )
-                                    Text(
-                                        text = folderName,
-                                        color = if (isSelected) Slate100 else Slate300,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        fontSize = 14.sp
-                                    )
+                                    Column {
+                                        Text(
+                                            text = folderName,
+                                            color = if (isSelected) Slate100 else if (isChildWritable) Slate200 else Slate400,
+                                            fontWeight = if (isSelected || isChildWritable) FontWeight.Medium else FontWeight.Normal,
+                                            fontSize = 14.sp
+                                        )
+                                        if (!isChildWritable) {
+                                            Text(
+                                                text = "Parent folder (Read-only navigation)",
+                                                color = Slate500,
+                                                fontSize = 10.sp
+                                            )
+                                        }
+                                    }
                                 }
 
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -320,11 +388,12 @@ fun ServerFolderDialog(
                 ) {
                     OutlinedTextField(
                         value = newFolderName,
-                        onValueChange = { newFolderName = it },
+                        onValueChange = { if (isCurrentWritable) newFolderName = it },
+                        enabled = isCurrentWritable,
                         placeholder = {
                             Text(
-                                text = "New subfolder name",
-                                color = Slate500,
+                                text = if (isCurrentWritable) "New subfolder name" else "Cannot create in root/parent folder",
+                                color = if (isCurrentWritable) Slate500 else Slate600,
                                 fontSize = 12.sp
                             )
                         },
@@ -333,13 +402,19 @@ fun ServerFolderDialog(
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Slate100,
                             unfocusedTextColor = Slate100,
+                            disabledTextColor = Slate600,
                             focusedBorderColor = Blue500,
-                            unfocusedBorderColor = Slate600
+                            unfocusedBorderColor = Slate600,
+                            disabledBorderColor = Slate700
                         )
                     )
 
                     Button(
                         onClick = {
+                            if (!isCurrentWritable) {
+                                Toast.makeText(context, "Cannot create folders outside allowed scope", Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
                             val trimmed = newFolderName.trim()
                             if (trimmed.isBlank()) {
                                 Toast.makeText(context, "Please enter a folder name", Toast.LENGTH_SHORT).show()
@@ -362,16 +437,28 @@ fun ServerFolderDialog(
                                 )
                             }
                         },
-                        enabled = !isCreating && newFolderName.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Emerald500),
+                        enabled = isCurrentWritable && !isCreating && newFolderName.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Emerald500,
+                            disabledContainerColor = Slate700
+                        ),
                         contentPadding = PaddingValues(horizontal = 12.dp)
                     ) {
                         if (isCreating) {
                             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
                         } else {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(
+                                imageVector = if (isCurrentWritable) Icons.Default.Add else Icons.Default.Lock,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = if (isCurrentWritable && newFolderName.isNotBlank()) Color.White else Slate500
+                            )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Create", fontSize = 12.sp)
+                            Text(
+                                text = "Create",
+                                fontSize = 12.sp,
+                                color = if (isCurrentWritable && newFolderName.isNotBlank()) Color.White else Slate500
+                            )
                         }
                     }
                 }
@@ -389,21 +476,41 @@ fun ServerFolderDialog(
                         Text("Cancel")
                     }
 
+                    val canSelect = isTargetWritable && (selectedTarget.isNotEmpty() || (scopes.isEmpty() && selectedTarget.isEmpty()))
                     Button(
                         onClick = {
+                            if (!canSelect) {
+                                Toast.makeText(context, "Cannot select root or parent folders outside your permitted scope", Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
                             val finalFolder = if (selectedTarget.isBlank()) currentNavPath else selectedTarget
                             viewModel.selectServerFolder(finalFolder)
                             Toast.makeText(context, "Target set to '${if (finalFolder.isEmpty()) "Root" else finalFolder}'", Toast.LENGTH_SHORT).show()
                             onDismiss()
                         },
+                        enabled = canSelect,
                         modifier = Modifier.weight(1.6f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Blue600)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Blue600,
+                            disabledContainerColor = Slate700
+                        )
                     ) {
-                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(
+                            imageVector = if (canSelect) Icons.Default.Check else Icons.Default.Lock,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = if (canSelect) Color.White else Slate500
+                        )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (selectedTarget.isEmpty()) "Select Root" else "Select This Folder",
-                            fontSize = 13.sp
+                            text = when {
+                                !isTargetWritable -> "Folder Read-Only"
+                                selectedTarget.isEmpty() && scopes.isEmpty() -> "Select Root"
+                                selectedTarget.isEmpty() -> "Select a Folder"
+                                else -> "Select This Folder"
+                            },
+                            fontSize = 13.sp,
+                            color = if (canSelect) Color.White else Slate500
                         )
                     }
                 }

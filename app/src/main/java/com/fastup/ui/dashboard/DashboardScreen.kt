@@ -74,6 +74,7 @@ fun DashboardScreen(
     val liveViewerMode by viewModel.liveViewerMode.collectAsState()
     val liveViewBitmap by viewModel.liveViewBitmap.collectAsState()
     val isLiveViewStreaming by viewModel.isLiveViewStreaming.collectAsState()
+    var showShareDialog by remember { mutableStateOf(false) }
 
     // Real-time Phone Battery Tracking
     var phoneBatteryLevel by remember { mutableIntStateOf(100) }
@@ -214,6 +215,7 @@ fun DashboardScreen(
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp)
                 .padding(top = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -222,6 +224,21 @@ fun DashboardScreen(
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
             )
+
+            FilledTonalButton(
+                onClick = { showShareDialog = true },
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = Blue600.copy(alpha = 0.25f),
+                    contentColor = Blue400
+                ),
+                modifier = Modifier.height(30.dp)
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Share Event", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
         }
 
         // 2. View finder / Quick preview (Full available width, edge-to-edge with no rounded corners or border)
@@ -636,6 +653,15 @@ fun DashboardScreen(
                 }
             }
         }
+    }
+
+    if (showShareDialog) {
+        com.fastup.ui.share.ShareModalDialog(
+            title = "Folder: ${viewModel.sessionId}",
+            targetPhoto = null,
+            viewModel = viewModel,
+            onDismiss = { showShareDialog = false }
+        )
     }
 }
 

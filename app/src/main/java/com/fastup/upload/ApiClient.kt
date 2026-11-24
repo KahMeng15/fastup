@@ -1,7 +1,7 @@
 package com.fastup.upload
 
 import android.util.Log
-import com.fastup.model.ShareSessionInfo
+import com.fastup.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -22,7 +22,13 @@ data class ClaimOtpResult(
     val serverUrl: String,
     val uploadFormat: String,
     val autoUpload: Boolean,
-    val wifiOnly: Boolean
+    val wifiOnly: Boolean,
+    val scopes: List<String> = emptyList()
+)
+
+data class StagingFoldersResult(
+    val folders: List<String>,
+    val scopes: List<String> = emptyList()
 )
 
 class ApiClient(
@@ -167,10 +173,10 @@ class ApiClient(
     }
 
     /**
-     * Fetch list of existing staging folders.
+     * Fetch list of existing staging folders and allowed scopes.
      * GET /api/staging/folders
      */
-    suspend fun fetchStagingFolders(): Result<List<String>> = withContext(Dispatchers.IO) {
+    suspend fun fetchStagingFoldersResult(): Result<StagingFoldersResult> = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
                 .url(cleanUrl("api/staging/folders"))
@@ -184,6 +190,7 @@ class ApiClient(
                 } else {
                     val bodyStr = response.body?.string() ?: "{}"
                     val folders = mutableListOf<String>()
+                    val scopes = mutableListOf<String>()
                     val obj = try { JSONObject(bodyStr) } catch (_: Exception) { null }
                     val array = if (obj != null && obj.has("folders")) {
                         obj.getJSONArray("folders")
@@ -202,7 +209,16 @@ class ApiClient(
                             }
                         }
                     }
-                    Result.success(folders)
+
+                    val scopesArr = obj?.optJSONArray("scopes")
+                    if (scopesArr != null) {
+                        for (i in 0 until scopesArr.length()) {
+                            val sc = scopesArr.optString(i)?.trim()?.trim('/')
+                            if (!sc.isNullOrEmpty()) scopes.add(sc)
+                        }
+                    }
+
+                    Result.success(StagingFoldersResult(folders = folders, scopes = scopes))
                 }
             }
         } catch (e: Exception) {
@@ -210,6 +226,9 @@ class ApiClient(
             Result.failure(e)
         }
     }
+
+    suspend fun fetchStagingFolders(): Result<List<String>> =
+        fetchStagingFoldersResult().map { it.folders }
 
     /**
      * Create a new staging folder on the server.
@@ -353,6 +372,18 @@ class ApiClient(
                     val sAuto = settings?.optBoolean("autoUpload", true) ?: true
                     val sWifi = settings?.optBoolean("wifiOnly", false) ?: false
 
+                    val scopesList = mutableListOf<String>()
+                    val scopesArr = jsonObj.optJSONArray("scopes")
+                    if (scopesArr != null) {
+                        for (i in 0 until scopesArr.length()) {
+                            val sc = scopesArr.optString(i)?.trim()?.trim('/')
+                            if (!sc.isNullOrEmpty()) scopesList.add(sc)
+                        }
+                    }
+                    if (scopesList.isEmpty() && folderPath.isNotBlank()) {
+                        scopesList.add(folderPath.trim().trim('/'))
+                    }
+
                     Result.success(
                         ClaimOtpResult(
                             token = token,
@@ -361,7 +392,8 @@ class ApiClient(
                             serverUrl = sUrl,
                             uploadFormat = sFormat,
                             autoUpload = sAuto,
-                            wifiOnly = sWifi
+                            wifiOnly = sWifi,
+                            scopes = scopesList
                         )
                     )
                 }
@@ -602,6 +634,286 @@ class ApiClient(
                 }
             }
         } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Check if a folder has active Google Drive sync.
+     * GET /api/gdrive/sync?folderPath=:folderPath&sourceType=FASTUP
+     */
+    suspend fun fetchFolderGDriveSync(
+        folderPath: String,
+        sourceType: String = "FASTUP"
+    ): Result<FolderSyncInfo> = withContext(Dispatchers.IO) {
+        try {
+            val encodedFolder = java.net.URLEncoder.encode(folderPath.trim().trimStart('/'), "UTF-8")
+            val endpoint = cleanUrl("api/gdrive/sync?folderPath=$encodedFolder&sourceType=$sourceType")
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("x-api-key", apiKey)
+                .addHeader("x-photographer-token", apiKey)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Result.failure(IOException("HTTP ${response.code}"))
+                } else {
+                    val bodyStr = response.body?.string() ?: "{}"
+                    val obj = JSONObject(bodyStr)
+                    val synced = obj.optBoolean("synced", false)
+                    if (!synced || !obj.has("sync") || obj.isNull("sync")) {
+                        Result.success(FolderSyncInfo(synced = false))
+                    } else {
+                        val s = obj.getJSONObject("sync")
+                        val syncRecord = FolderGDriveSync(
+                            id = s.optString("id"),
+                            accountId = s.optString("account_id"),
+                            folderPath = s.optString("folder_path"),
+                            gdriveFolderId = s.optString("gdrive_folder_id"),
+                            gdriveFolderName = s.optString("gdrive_folder_name"),
+                            gdriveLink = s.optString("gdrive_link"),
+                            syncedFileCount = s.optInt("syncedFileCount", 0),
+                            totalLocalJpegs = s.optInt("totalLocalJpegs", 0),
+                            syncStatus = s.optString("sync_status", "IDLE"),
+                            isActive = s.optBoolean("is_active", true)
+                        )
+                        Result.success(FolderSyncInfo(synced = true, sync = syncRecord))
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("ApiClient", "Error fetching GDrive sync info: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch connected Google Accounts for Google Drive sync.
+     * GET /api/gdrive/accounts
+     */
+    suspend fun fetchGoogleAccounts(): Result<List<GoogleAccount>> = withContext(Dispatchers.IO) {
+        try {
+            val endpoint = cleanUrl("api/gdrive/accounts")
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("x-api-key", apiKey)
+                .addHeader("x-photographer-token", apiKey)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Result.failure(IOException("Failed to list Google Accounts: HTTP ${response.code}"))
+                } else {
+                    val bodyStr = response.body?.string() ?: "{}"
+                    val obj = JSONObject(bodyStr)
+                    val arr = obj.optJSONArray("accounts") ?: org.json.JSONArray()
+                    val accounts = mutableListOf<GoogleAccount>()
+                    for (i in 0 until arr.length()) {
+                        val a = arr.getJSONObject(i)
+                        val id = a.optString("id")
+                        val email = a.optString("email")
+                        val label = if (a.isNull("label")) null else a.optString("label").ifBlank { null }
+                        if (id.isNotBlank() && email.isNotBlank()) {
+                            accounts.add(GoogleAccount(id = id, email = email, label = label))
+                        }
+                    }
+                    Result.success(accounts)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("ApiClient", "Error listing Google accounts: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * List remote folders in a Google Drive account.
+     * GET /api/gdrive/folders?accountId=:accountId&parentId=:parentId
+     */
+    suspend fun fetchGoogleDriveFolders(
+        accountId: String,
+        parentId: String? = null
+    ): Result<List<GDriveFolder>> = withContext(Dispatchers.IO) {
+        try {
+            val encodedAccount = java.net.URLEncoder.encode(accountId, "UTF-8")
+            val parentQuery = if (!parentId.isNullOrBlank()) {
+                "&parentId=" + java.net.URLEncoder.encode(parentId, "UTF-8")
+            } else ""
+            val endpoint = cleanUrl("api/gdrive/folders?accountId=$encodedAccount$parentQuery")
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("x-api-key", apiKey)
+                .addHeader("x-photographer-token", apiKey)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Result.failure(IOException("Failed to list Drive folders: HTTP ${response.code}"))
+                } else {
+                    val bodyStr = response.body?.string() ?: "{}"
+                    val obj = JSONObject(bodyStr)
+                    val arr = obj.optJSONArray("folders") ?: org.json.JSONArray()
+                    val list = mutableListOf<GDriveFolder>()
+                    for (i in 0 until arr.length()) {
+                        val f = arr.getJSONObject(i)
+                        val id = f.optString("id")
+                        val name = f.optString("name")
+                        if (id.isNotBlank() && name.isNotBlank()) {
+                            list.add(GDriveFolder(id = id, name = name))
+                        }
+                    }
+                    Result.success(list)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("ApiClient", "Error fetching Google Drive folders: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Initialize or set up Google Drive sync for a folder.
+     * POST /api/gdrive/sync
+     */
+    suspend fun initializeGDriveSync(
+        accountId: String,
+        folderPath: String,
+        sourceType: String = "FASTUP",
+        folderName: String? = null,
+        existingFolderId: String? = null
+    ): Result<FolderGDriveSync> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("accountId", accountId)
+                put("folderPath", folderPath.trim().trimStart('/'))
+                put("sourceType", sourceType)
+                if (!folderName.isNullOrBlank()) put("folderName", folderName)
+                if (!existingFolderId.isNullOrBlank()) put("existingFolderId", existingFolderId)
+            }
+            val body = json.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+            val endpoint = cleanUrl("api/gdrive/sync")
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("x-api-key", apiKey)
+                .addHeader("x-photographer-token", apiKey)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string() ?: "{}"
+                if (!response.isSuccessful) {
+                    val err = try { JSONObject(bodyStr).optString("error", bodyStr) } catch (_: Exception) { bodyStr }
+                    Result.failure(IOException(err.ifBlank { "Setup failed (${response.code})" }))
+                } else {
+                    val obj = JSONObject(bodyStr)
+                    val s = obj.optJSONObject("sync") ?: obj
+                    val syncRecord = FolderGDriveSync(
+                        id = s.optString("id"),
+                        accountId = s.optString("account_id", accountId),
+                        folderPath = s.optString("folder_path", folderPath),
+                        gdriveFolderId = s.optString("gdrive_folder_id"),
+                        gdriveFolderName = s.optString("gdrive_folder_name", folderName ?: ""),
+                        gdriveLink = s.optString("gdrive_link"),
+                        syncedFileCount = s.optInt("syncedFileCount", 0),
+                        totalLocalJpegs = s.optInt("totalLocalJpegs", 0),
+                        syncStatus = s.optString("sync_status", "IDLE"),
+                        isActive = s.optBoolean("is_active", true)
+                    )
+                    Result.success(syncRecord)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("ApiClient", "Error initializing GDrive sync: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Get Google Drive link for an individual media file.
+     * GET /api/gdrive/media/:mediaId/link
+     */
+    suspend fun fetchMediaGDriveLink(mediaId: String): Result<MediaGDriveLinkResult> = withContext(Dispatchers.IO) {
+        try {
+            val endpoint = cleanUrl("api/gdrive/media/$mediaId/link")
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("x-api-key", apiKey)
+                .addHeader("x-photographer-token", apiKey)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Result.failure(IOException("HTTP ${response.code}"))
+                } else {
+                    val bodyStr = response.body?.string() ?: "{}"
+                    val obj = JSONObject(bodyStr)
+                    val synced = obj.optBoolean("synced", false)
+                    val link = if (obj.isNull("link")) null else obj.optString("link").ifBlank { null }
+                    val gdriveFileId = if (obj.isNull("gdriveFileId")) null else obj.optString("gdriveFileId").ifBlank { null }
+                    Result.success(MediaGDriveLinkResult(synced = synced, link = link, gdriveFileId = gdriveFileId))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("ApiClient", "Error fetching media GDrive link: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Create or fetch individual photo share link.
+     * POST /api/staging/create-share with { sessionId, mediaId }
+     */
+    suspend fun createMediaShareLink(
+        sessionId: String,
+        mediaId: String,
+        expiresInHours: Int = 168
+    ): Result<ShareSessionInfo> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("sessionId", sessionId.trim().trimStart('/'))
+                put("session_id", sessionId.trim().trimStart('/'))
+                put("mediaId", mediaId)
+                put("expires_in_hours", expiresInHours)
+            }
+
+            val body = json.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+            val request = Request.Builder()
+                .url(cleanUrl("api/staging/create-share"))
+                .addHeader("x-api-key", apiKey)
+                .addHeader("x-photographer-token", apiKey)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string() ?: "{}"
+                if (!response.isSuccessful) {
+                    val err = try { JSONObject(bodyStr).optString("error", bodyStr) } catch (_: Exception) { bodyStr }
+                    Result.failure(IOException("Failed to create media share: $err"))
+                } else {
+                    val obj = JSONObject(bodyStr)
+                    val shareUrl = when {
+                        obj.has("share_url") -> obj.getString("share_url")
+                        obj.has("shareUrl") -> obj.getString("shareUrl")
+                        obj.has("url") -> obj.getString("url")
+                        obj.has("shareToken") -> "${baseUrl.trimEnd('/')}/share/${obj.getString("shareToken")}"
+                        else -> "${baseUrl.trimEnd('/')}/share/$sessionId"
+                    }
+                    Result.success(ShareSessionInfo(sessionId = sessionId, shareUrl = shareUrl))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("ApiClient", "Error creating media share link: ${e.message}")
             Result.failure(e)
         }
     }

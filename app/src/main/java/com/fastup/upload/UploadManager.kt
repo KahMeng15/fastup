@@ -58,6 +58,41 @@ class UploadManager(private val context: Context) {
     private val _photographerName = MutableStateFlow<String?>(prefs.getString(PREF_PHOTOGRAPHER_NAME, null))
     val photographerName: StateFlow<String?> = _photographerName.asStateFlow()
 
+    private val _scopes = MutableStateFlow<List<String>>(
+        prefs.getStringSet(PREF_SCOPES, emptySet())?.toList() ?: emptyList()
+    )
+    val scopesFlow: StateFlow<List<String>> = _scopes.asStateFlow()
+
+    var scopes: List<String>
+        get() = _scopes.value
+        set(value) {
+            _scopes.value = value
+            prefs.edit().putStringSet(PREF_SCOPES, value.toSet()).apply()
+        }
+
+    fun updateScopes(newScopes: List<String>) {
+        val clean = newScopes.map { it.trim().trim('/') }.filter { it.isNotEmpty() }
+        scopes = clean
+    }
+
+    fun isFolderWritable(folderPath: String): Boolean {
+        val clean = folderPath.trim().trim('/')
+        // Root is NEVER writable (users cannot write directly to root parent folder)
+        if (clean.isEmpty()) return false
+
+        val currentScopes = scopes
+        // If no scopes set or unrestricted (contains * or /), any non-empty subfolder is writable
+        if (currentScopes.isEmpty() || currentScopes.any { it == "*" || it == "" || it == "/" }) {
+            return true
+        }
+
+        return currentScopes.any { scope ->
+            val s = scope.trim().trim('/')
+            if (s.isEmpty() || s == "*") true
+            else clean.equals(s, ignoreCase = true) || clean.startsWith("$s/", ignoreCase = true)
+        }
+    }
+
     var apiClient = ApiClient(serverUrl, apiKey)
         private set
 
@@ -70,6 +105,7 @@ class UploadManager(private val context: Context) {
             _currentSessionId.value = value
             prefs.edit().putString(PREF_CURRENT_FOLDER, value).apply()
             syncUploadedFilesWithServer()
+            checkFolderGDriveSync(value)
         }
 
     var cameraCaptureFormat: com.fastup.model.CameraCaptureFormat = try {
@@ -136,6 +172,9 @@ class UploadManager(private val context: Context) {
     private val _shareSession = MutableStateFlow<ShareSessionInfo?>(null)
     val shareSession: StateFlow<ShareSessionInfo?> = _shareSession.asStateFlow()
 
+    private val _folderGDriveSync = MutableStateFlow<com.fastup.model.FolderSyncInfo?>(null)
+    val folderGDriveSync: StateFlow<com.fastup.model.FolderSyncInfo?> = _folderGDriveSync.asStateFlow()
+
     private val _serverConnectionState = MutableStateFlow(ServerConnectionState.DISCONNECTED)
     val serverConnectionState: StateFlow<ServerConnectionState> = _serverConnectionState.asStateFlow()
 
@@ -149,8 +188,20 @@ class UploadManager(private val context: Context) {
         scanExistingCaptures()
         refreshLocalFolders()
         syncUploadedFilesWithServer()
+        checkFolderGDriveSync()
         checkServerConnection()
         startWorker()
+    }
+
+    fun checkFolderGDriveSync(folderPath: String = currentSessionId, onResult: ((com.fastup.model.FolderSyncInfo?) -> Unit)? = null) {
+        scope.launch {
+            val res = apiClient.fetchFolderGDriveSync(folderPath)
+            val info = res.getOrNull()
+            _folderGDriveSync.value = info
+            withContext(Dispatchers.Main) {
+                onResult?.invoke(info)
+            }
+        }
     }
 
     fun checkServerConnection(onResult: ((Boolean) -> Unit)? = null) {
@@ -504,6 +555,7 @@ class UploadManager(private val context: Context) {
         var totalUploadedBytes = 0L
         var uploadFailed = false
         var failureReason: String? = null
+        var lastUploadResponseJson: String? = null
 
         for (fileToUpload in filesToUpload) {
             var lastTime = System.currentTimeMillis()
@@ -543,6 +595,7 @@ class UploadManager(private val context: Context) {
                 break
             } else {
                 totalUploadedBytes += fileToUpload.length()
+                lastUploadResponseJson = result.getOrNull()
             }
         }
 
@@ -570,13 +623,25 @@ class UploadManager(private val context: Context) {
             }
             editor.apply()
 
+            var uploadedMediaId: String? = null
+            try {
+                if (!lastUploadResponseJson.isNullOrBlank()) {
+                    val jObj = org.json.JSONObject(lastUploadResponseJson)
+                    val fArr = jObj.optJSONArray("files")
+                    if (fArr != null && fArr.length() > 0) {
+                        uploadedMediaId = fArr.getJSONObject(0).optString("id").ifBlank { null }
+                    }
+                }
+            } catch (_: Exception) {}
+
             _photos.update { list ->
                 list.map {
                     if (it.id == photoId) it.copy(
                         status = UploadStatus.COMPLETED,
                         uploadProgress = 1f,
                         uploadSpeedBps = 0L,
-                        errorMessage = null
+                        errorMessage = null,
+                        serverMediaId = uploadedMediaId ?: it.serverMediaId
                     )
                     else it
                 }
@@ -586,6 +651,7 @@ class UploadManager(private val context: Context) {
             scope.launch {
                 kotlinx.coroutines.delay(2500)
                 syncUploadedFilesWithServer()
+                checkFolderGDriveSync()
             }
         }
     }
@@ -754,7 +820,8 @@ class UploadManager(private val context: Context) {
         _photographerName.value = result.photographerName
         prefs.edit().putString(PREF_PHOTOGRAPHER_NAME, result.photographerName).apply()
 
-        if (result.serverUrl.isNotBlank()) {
+        val isLocalhost = result.serverUrl.contains("://localhost", ignoreCase = true) || result.serverUrl.contains("://127.0.0.1")
+        if (result.serverUrl.isNotBlank() && !isLocalhost) {
             serverUrl = result.serverUrl
         }
         if (result.folderPath.isNotBlank()) {
@@ -771,11 +838,18 @@ class UploadManager(private val context: Context) {
         }
         autoUpload = result.autoUpload
         wifiOnly = result.wifiOnly
+
+        val initialScopes = result.scopes.ifEmpty {
+            if (result.folderPath.isNotBlank()) listOf(result.folderPath.trim().trim('/')) else emptyList()
+        }
+        updateScopes(initialScopes)
     }
 
     fun disconnectPhotographer() {
         _photographerName.value = null
         prefs.edit().remove(PREF_PHOTOGRAPHER_NAME).apply()
+        scopes = emptyList()
+        prefs.edit().remove(PREF_SCOPES).apply()
     }
 
     companion object {
@@ -790,5 +864,6 @@ class UploadManager(private val context: Context) {
         private const val PREF_UPLOAD_PAUSED = "pref_upload_paused"
         private const val PREF_PHOTOGRAPHER_NAME = "pref_photographer_name"
         private const val PREF_LIVE_VIEWER_MODE = "pref_live_viewer_mode"
+        private const val PREF_SCOPES = "pref_scopes"
     }
 }

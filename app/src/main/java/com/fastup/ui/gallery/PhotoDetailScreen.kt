@@ -9,9 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,6 +33,7 @@ fun PhotoDetailScreen(
 ) {
     val photos by viewModel.photos.collectAsState()
     val photo = photos.find { it.id == photoId }
+    var showShareDialog by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
 
     if (photo == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -53,6 +52,9 @@ fun PhotoDetailScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showShareDialog = true }) {
+                        Icon(Icons.Default.Share, contentDescription = "Share Links & QR", tint = Color(0xFF38BDF8))
+                    }
                     IconButton(onClick = { viewModel.retryPhoto(photo.id) }) {
                         Icon(Icons.Default.Upload, contentDescription = "Upload", tint = Blue500)
                     }
@@ -231,6 +233,15 @@ fun PhotoDetailScreen(
             viewModel = viewModel,
             onPhotoSelect = { /* Already in detail screen */ }
         )
+
+        if (showShareDialog) {
+            com.fastup.ui.share.ShareModalDialog(
+                title = photo.fileName,
+                targetPhoto = photo,
+                viewModel = viewModel,
+                onDismiss = { showShareDialog = false }
+            )
+        }
     }
 }
 

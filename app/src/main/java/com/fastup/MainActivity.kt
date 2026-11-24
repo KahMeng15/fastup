@@ -165,11 +165,7 @@ fun MainAppScaffold(viewModel: MainViewModel) {
                     containerColor = PureBlack,
                     contentColor = Slate100,
                     tonalElevation = 0.dp,
-                    modifier = Modifier
-                        .height(56.dp)
-                        .border(
-                            androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-                        )
+                    modifier = Modifier.height(56.dp)
                 ) {
                     items.forEach { screen ->
                         NavigationBarItem(

@@ -8,10 +8,12 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -23,9 +25,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fastup.model.UploadFormat
+import com.fastup.model.ServerConnectionState
 import com.fastup.ui.dashboard.ServerFolderDialog
 import com.fastup.ui.theme.*
 import com.fastup.ui.viewmodel.MainViewModel
@@ -50,10 +54,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var showClearDialog by remember { mutableStateOf(false) }
     var showPairDialog by remember { mutableStateOf(false) }
     var showFolderDialog by remember { mutableStateOf(false) }
+    var showSettingsShareDialog by remember { mutableStateOf(false) }
     var sessionNameInput by remember(targetFolder) { mutableStateOf(targetFolder) }
     var isGeneratingShare by remember { mutableStateOf(false) }
     var pairOtpCode by remember { mutableStateOf("") }
     var isPairing by remember { mutableStateOf(false) }
+    var pairErrorMessage by remember { mutableStateOf<String?>(null) }
+    val serverState by viewModel.serverConnectionState.collectAsState()
 
     var urlInput by remember { mutableStateOf(viewModel.serverUrl) }
     var selectedCameraFormat by remember { mutableStateOf(viewModel.cameraCaptureFormat) }
@@ -112,6 +119,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
+                        modifier = Modifier.weight(1f, fill = false),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -119,27 +127,35 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             imageVector = Icons.Default.VpnKey,
                             contentDescription = null,
                             tint = if (photographerName != null) Emerald500 else Blue500,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = if (photographerName != null) "HelloMyPhotos Connected" else "Pair with HelloMyPhotos",
+                            text = if (photographerName != null) "HelloMyPhotos" else "Pair with HelloMyPhotos",
                             color = Slate100,
                             fontWeight = FontWeight.SemiBold,
-                            fontSize = 16.sp
+                            fontSize = 15.sp,
+                            maxLines = 1
                         )
                     }
 
                     if (photographerName != null) {
+                        val (statusText, statusBg, statusColor) = when (serverState) {
+                            ServerConnectionState.CONNECTED -> Triple("Online", Emerald500.copy(alpha = 0.18f), Emerald500)
+                            ServerConnectionState.CONNECTING -> Triple("Connecting", Blue500.copy(alpha = 0.18f), Blue500)
+                            ServerConnectionState.ERROR -> Triple("Error", Rose500.copy(alpha = 0.18f), Rose500)
+                            else -> Triple("Offline", Slate600.copy(alpha = 0.35f), Slate400)
+                        }
+
                         Surface(
-                            color = Emerald500.copy(alpha = 0.2f),
+                            color = statusBg,
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Text(
-                                text = "PAIRED",
-                                color = Emerald500,
+                                text = "● $statusText",
+                                color = statusColor,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                             )
                         }
                     }
@@ -301,27 +317,14 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 )
 
                 Button(
-                    onClick = {
-                        isGeneratingShare = true
-                        viewModel.generateShareLink { result ->
-                            isGeneratingShare = false
-                            result.onFailure {
-                                Toast.makeText(context, "Error: ${it.message}", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    },
-                    enabled = !isGeneratingShare,
+                    onClick = { showSettingsShareDialog = true },
                     colors = ButtonDefaults.buttonColors(containerColor = Blue600),
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    if (isGeneratingShare) {
-                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
-                    } else {
-                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Generate Instant Share Link")
-                    }
+                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Share Links & Cloud Sync (Hellomyphotos & GDrive)")
                 }
 
                 // Share link display with QR code
@@ -626,142 +629,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
-                    }
-                }
-            }
-        }
-
-        // Battery Saver / USB Power Management Card (Collapsible)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Slate800.copy(alpha = 0.9f)),
-            shape = RoundedCornerShape(16.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Emerald500.copy(alpha = 0.4f))
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.BatteryChargingFull,
-                            contentDescription = null,
-                            tint = Emerald500,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = "Phone Battery Saver & USB Power",
-                            color = Slate100,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            color = Emerald500.copy(alpha = 0.2f),
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Text(
-                                text = "RECOMMENDED",
-                                color = Emerald500,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        IconButton(onClick = { showBatteryGuide = !showBatteryGuide }) {
-                            Icon(
-                                imageVector = if (showBatteryGuide) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                contentDescription = if (showBatteryGuide) "Collapse" else "Expand",
-                                tint = Slate400
-                            )
-                        }
-                    }
-                }
-
-                AnimatedVisibility(visible = showBatteryGuide) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            text = "Prevent the Sony camera from draining phone battery over the USB-C cable:",
-                            color = Slate300,
-                            fontSize = 13.sp
-                        )
-
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Slate900.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.Top,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .offset(y = 6.dp)
-                                        .background(Emerald500, CircleShape)
-                                )
-                                Text(
-                                    text = "Step 1: On your camera, press MENU.",
-                                    color = Slate200,
-                                    fontSize = 12.sp
-                                )
-                            }
-                            Row(
-                                verticalAlignment = Alignment.Top,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .offset(y = 6.dp)
-                                        .background(Emerald500, CircleShape)
-                                )
-                                Text(
-                                    text = "Step 2: Go to Setup (yellow briefcase 💼) → Page 4/5.",
-                                    color = Slate200,
-                                    fontSize = 12.sp
-                                )
-                            }
-                            Row(
-                                verticalAlignment = Alignment.Top,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .offset(y = 6.dp)
-                                        .background(Emerald500, CircleShape)
-                                )
-                                Text(
-                                    text = "Step 3: Set [USB Power Supply] to \"Off\".",
-                                    color = Emerald400,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-
-                        Text(
-                            text = "💡 With this setting Off, the camera runs exclusively on its own internal battery and will not draw charging current from your phone, preserving your phone's battery life throughout full event shoots.",
-                            color = Slate400,
-                            fontSize = 11.5.sp,
-                            lineHeight = 16.sp
-                        )
                     }
                 }
             }
@@ -1106,46 +973,135 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
-        // Staging Cleanup Card
+        // Phone Battery Saver & USB Power Management Card (Collapsible, Minimized by Default, at Bottom)
         Card(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { showBatteryGuide = !showBatteryGuide },
             colors = CardDefaults.cardColors(containerColor = Slate800),
-            shape = RoundedCornerShape(16.dp)
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Slate700)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(
-                    text = "Event Cleanup",
-                    color = Slate100,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp
-                )
-                Text(
-                    text = "Trigger cleanup of server staging volume after editing is done and archived to media_ro",
-                    color = Slate400,
-                    fontSize = 12.sp
-                )
-
-                Button(
-                    onClick = {
-                        viewModel.cleanupCurrentSession { success ->
-                            if (success) {
-                                Toast.makeText(context, "Session cleaned up successfully on server!", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "Failed to clean up session on server", Toast.LENGTH_SHORT).show()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BatteryChargingFull,
+                            contentDescription = null,
+                            tint = Emerald500,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Phone Battery & USB Power",
+                                color = Slate100,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                            if (!showBatteryGuide) {
+                                Text(
+                                    text = "Sony USB power supply guide (tap to expand)",
+                                    color = Slate400,
+                                    fontSize = 11.5.sp
+                                )
                             }
                         }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Rose500),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Clean Up Server Staging Volume")
+                    }
+                    IconButton(onClick = { showBatteryGuide = !showBatteryGuide }) {
+                        Icon(
+                            imageVector = if (showBatteryGuide) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (showBatteryGuide) "Collapse" else "Expand",
+                            tint = Slate400
+                        )
+                    }
+                }
+
+                AnimatedVisibility(visible = showBatteryGuide) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "Prevent the Sony camera from draining phone battery over the USB-C cable:",
+                            color = Slate300,
+                            fontSize = 13.sp
+                        )
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Slate900.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .offset(y = 6.dp)
+                                        .background(Emerald500, CircleShape)
+                                )
+                                Text(
+                                    text = "Step 1: On your camera, press MENU.",
+                                    color = Slate200,
+                                    fontSize = 12.sp
+                                )
+                            }
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .offset(y = 6.dp)
+                                        .background(Emerald500, CircleShape)
+                                )
+                                Text(
+                                    text = "Step 2: Go to Setup (yellow briefcase 💼) → Page 4/5.",
+                                    color = Slate200,
+                                    fontSize = 12.sp
+                                )
+                            }
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .offset(y = 6.dp)
+                                        .background(Emerald500, CircleShape)
+                                )
+                                Text(
+                                    text = "Step 3: Set [USB Power Supply] to \"Off\".",
+                                    color = Emerald400,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = "💡 With this setting Off, the camera runs exclusively on its own internal battery and will not draw charging current from your phone, preserving your phone's battery life throughout full event shoots.",
+                            color = Slate400,
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
                 }
             }
         }
@@ -1224,7 +1180,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                                     tint = Blue400,
                                     modifier = Modifier.size(16.dp)
                                 )
-                                Column {
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = "Connecting to Server:",
                                         color = Slate400,
@@ -1238,15 +1194,64 @@ fun SettingsScreen(viewModel: MainViewModel) {
                                         fontWeight = FontWeight.Medium
                                     )
                                 }
+                                val (probeText, probeColor) = when (serverState) {
+                                    ServerConnectionState.CONNECTED -> Pair("Online", Emerald500)
+                                    ServerConnectionState.CONNECTING -> Pair("Connecting", Blue500)
+                                    else -> Pair("Offline", Slate400)
+                                }
+                                Surface(
+                                    color = probeColor.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = "● $probeText",
+                                        color = probeColor,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (pairErrorMessage != null) {
+                            Surface(
+                                color = Rose500.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, Rose500.copy(alpha = 0.4f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ErrorOutline,
+                                        contentDescription = null,
+                                        tint = Rose500,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = pairErrorMessage!!,
+                                        color = Rose500,
+                                        fontSize = 12.sp,
+                                        lineHeight = 16.sp
+                                    )
+                                }
                             }
                         }
 
                         OutlinedTextField(
                             value = pairOtpCode,
-                            onValueChange = { if (it.length <= 6) pairOtpCode = it.filter { ch -> ch.isDigit() } },
+                            onValueChange = {
+                                pairErrorMessage = null
+                                if (it.length <= 6) pairOtpCode = it.filter { ch -> ch.isDigit() }
+                            },
                             label = { Text("6-Digit OTP Code") },
                             placeholder = { Text("123456") },
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = Blue500,
                                 unfocusedBorderColor = Slate600,
@@ -1261,21 +1266,26 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     Button(
                         onClick = {
                             if (pairOtpCode.length != 6) {
-                                Toast.makeText(context, "Please enter a 6-digit code", Toast.LENGTH_SHORT).show()
+                                pairErrorMessage = "Please enter a 6-digit OTP code."
                                 return@Button
                             }
                             isPairing = true
+                            pairErrorMessage = null
                             viewModel.pairWithOtp(viewModel.serverUrl.trim(), pairOtpCode.trim()) { res ->
                                 isPairing = false
                                 res.onSuccess { pName ->
                                     showPairDialog = false
+                                    pairErrorMessage = null
+                                    pairOtpCode = ""
                                     urlInput = viewModel.serverUrl
                                     selectedFormat = viewModel.uploadFormat
                                     autoUpload = viewModel.autoUpload
                                     wifiOnly = viewModel.wifiOnly
                                     Toast.makeText(context, "Connected as $pName!", Toast.LENGTH_LONG).show()
                                 }.onFailure { err ->
-                                    Toast.makeText(context, "Pairing failed: ${err.message}", Toast.LENGTH_LONG).show()
+                                    val msg = err.message ?: "Pairing failed"
+                                    pairErrorMessage = msg
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                 }
                             }
                         },
@@ -1301,6 +1311,15 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 },
                 containerColor = Slate800,
                 shape = RoundedCornerShape(16.dp)
+            )
+        }
+
+        if (showSettingsShareDialog) {
+            com.fastup.ui.share.ShareModalDialog(
+                title = "Folder: ${viewModel.sessionId}",
+                targetPhoto = null,
+                viewModel = viewModel,
+                onDismiss = { showSettingsShareDialog = false }
             )
         }
     }

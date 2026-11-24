@@ -253,3 +253,33 @@ If the USB tests succeed, this is the architecture I recommend.
   - Added `curationViewMode` state flow and dual-view switcher (`★ Curated` vs `All`) in `GalleryScreen.kt`.
   - Added burst counter badge (`★ N`) on grid items in `GalleryScreen.kt`.
   - Verified compilation and built debug APK (`assembleDebug` passing).
+
+### **Phase 4: Dual Share Links (Hellomyphotos + Google Drive) & In-App GDrive Sync Initialization** ✅ COMPLETED
+- [x] **Backend API Enhancements (`hellomyphotos/backend`)**:
+  - Enabled photographer token / staging API key authentication (`requireStagingAuth`) on Google Drive endpoints (`/api/gdrive/accounts`, `/api/gdrive/folders`, `/api/gdrive/sync`, `/api/gdrive/media/:mediaId/link`).
+  - Added `GET /api/gdrive/accounts` to allow clients to list connected Google accounts.
+  - Updated `StagingService.createShare` and `POST /api/staging/create-share` to accept `mediaId` parameter for generating on-demand single photo share links in addition to folder share links.
+- [x] **FastUp Android App Architecture (`fastup`)**:
+  - Created `GDriveModels.kt` containing `GoogleAccount`, `GDriveFolder`, `FolderGDriveSync`, `FolderSyncInfo`, `MediaGDriveLinkResult`, and `DualShareLinks`.
+  - Enhanced `ApiClient.kt` with methods:
+    - `fetchFolderGDriveSync`
+    - `fetchGoogleAccounts`
+    - `fetchGoogleDriveFolders`
+    - `initializeGDriveSync`
+    - `fetchMediaGDriveLink`
+    - `createMediaShareLink`
+  - Integrated `UploadManager.kt` to capture uploaded `serverMediaId` immediately upon upload completion and track `folderGDriveSync`.
+  - Added ViewModel orchestration in `MainViewModel.kt` for `fetchFolderShareLinks`, `fetchPhotoShareLinks`, and `initializeGDriveSync`.
+- [x] **Dual-Share & Cloud Sync UI (`fastup/ui/share/ShareModalDialog.kt`)**:
+  - Unified `ShareModalDialog` supporting both folder and individual photo levels.
+  - Displays **Hellomyphotos Link** (Web gallery / single photo view) with 1-click **Copy Link** and **Show QR**.
+  - Displays **Google Drive Link** (Folder or direct file link) with 1-click **Copy Link** and **Show QR**.
+  - If Google Drive Sync is uninitialized: displays prompt card with 1-click setup sheet:
+    - Account selection (from connected Google Accounts).
+    - Destination mode toggle: **Create New Folder** (with name input) vs **Select Existing Drive Folder** (with folder tree selection).
+    - "Enable & Start Sync" trigger.
+  - Interactive `QrCodeDialog` with ZXing high-res rendering, copy to clipboard, and native Android `Intent.ACTION_SEND` system sharing.
+  - Added 1-tap "Share Event" action on **DashboardScreen**, "Share" icon in **PhotoDetailScreen**, and upgraded session sharing in **SettingsScreen**.
+- [x] **Verification**:
+  - `hellomyphotos/backend` TypeScript check passing with 0 errors (`npx tsc --noEmit`).
+  - `fastup` Android debug APK successfully compiled and packaged (`./gradlew assembleDebug` passing).

@@ -3,13 +3,10 @@ package com.fastup.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fastup.FastUpApp
-import com.fastup.model.CameraConnectionState
-import com.fastup.model.PhotoItem
-import com.fastup.model.ServerConnectionState
-import com.fastup.model.ShareSessionInfo
-import com.fastup.model.UploadFormat
-import com.fastup.model.UploadStatus
+import com.fastup.model.*
 import com.fastup.usb.UsbCameraManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +41,7 @@ class MainViewModel : ViewModel() {
     val isUploading: StateFlow<Boolean> = uploadManager.isUploading
     val isUploadPaused: StateFlow<Boolean> = uploadManager.isUploadPaused
     val shareSession: StateFlow<ShareSessionInfo?> = uploadManager.shareSession
+    val folderGDriveSync: StateFlow<FolderSyncInfo?> = uploadManager.folderGDriveSync
     val serverConnectionState: StateFlow<ServerConnectionState> = uploadManager.serverConnectionState
 
     private val _cameraState = MutableStateFlow(CameraConnectionState.DISCONNECTED)
@@ -186,12 +184,17 @@ class MainViewModel : ViewModel() {
     val photographerName: StateFlow<String?> = uploadManager.photographerName
 
     val currentSessionId: StateFlow<String> = uploadManager.currentSessionIdFlow
+    val scopes: StateFlow<List<String>> = uploadManager.scopesFlow
 
     var sessionId: String
         get() = uploadManager.currentSessionId
         set(value) {
             uploadManager.currentSessionId = value
         }
+
+    fun isFolderWritable(folderPath: String): Boolean {
+        return uploadManager.isFolderWritable(folderPath)
+    }
 
     private val _serverFolders = MutableStateFlow<List<String>>(emptyList())
     val serverFolders: StateFlow<List<String>> = _serverFolders.asStateFlow()
@@ -202,12 +205,15 @@ class MainViewModel : ViewModel() {
     fun loadServerFolders(onDone: ((Result<List<String>>) -> Unit)? = null) {
         viewModelScope.launch {
             _isLoadingFolders.value = true
-            val res = uploadManager.apiClient.fetchStagingFolders()
-            res.onSuccess { list ->
-                _serverFolders.value = list
+            val res = uploadManager.apiClient.fetchStagingFoldersResult()
+            res.onSuccess { result ->
+                _serverFolders.value = result.folders
+                if (result.scopes.isNotEmpty()) {
+                    uploadManager.updateScopes(result.scopes)
+                }
             }
             _isLoadingFolders.value = false
-            onDone?.invoke(res)
+            onDone?.invoke(res.map { it.folders })
         }
     }
 
@@ -403,6 +409,162 @@ class MainViewModel : ViewModel() {
 
     fun generateShareLink(onResult: (Result<ShareSessionInfo>) -> Unit) {
         uploadManager.generateShareLink(onResult)
+    }
+
+    fun refreshGDriveSync(folderPath: String = sessionId) {
+        uploadManager.checkFolderGDriveSync(folderPath)
+    }
+
+    fun fetchGoogleAccounts(onResult: (Result<List<GoogleAccount>>) -> Unit) {
+        viewModelScope.launch {
+            val res = uploadManager.apiClient.fetchGoogleAccounts()
+            withContext(Dispatchers.Main) {
+                onResult(res)
+            }
+        }
+    }
+
+    fun fetchGoogleDriveFolders(
+        accountId: String,
+        parentId: String? = null,
+        onResult: (Result<List<GDriveFolder>>) -> Unit
+    ) {
+        viewModelScope.launch {
+            val res = uploadManager.apiClient.fetchGoogleDriveFolders(accountId, parentId)
+            withContext(Dispatchers.Main) {
+                onResult(res)
+            }
+        }
+    }
+
+    fun initializeGDriveSync(
+        accountId: String,
+        folderName: String? = null,
+        existingFolderId: String? = null,
+        onResult: (Result<FolderGDriveSync>) -> Unit
+    ) {
+        viewModelScope.launch {
+            val res = uploadManager.apiClient.initializeGDriveSync(
+                accountId = accountId,
+                folderPath = sessionId,
+                folderName = folderName,
+                existingFolderId = existingFolderId
+            )
+            res.onSuccess {
+                uploadManager.checkFolderGDriveSync(sessionId)
+            }
+            withContext(Dispatchers.Main) {
+                onResult(res)
+            }
+        }
+    }
+
+    fun fetchFolderShareLinks(onResult: (DualShareLinks) -> Unit) {
+        viewModelScope.launch {
+            var hellomyphotosLink: String? = null
+            var gdriveLink: String? = null
+            var isSynced = false
+            var gdriveStatus = "NOT_INITIALIZED"
+
+            // 1. Fetch Hellomyphotos folder share link
+            val shareRes = uploadManager.apiClient.createShareLink(sessionId)
+            shareRes.onSuccess {
+                hellomyphotosLink = it.shareUrl
+            }
+
+            // 2. Fetch Google Drive folder sync info
+            val gdriveRes = uploadManager.apiClient.fetchFolderGDriveSync(sessionId)
+            gdriveRes.onSuccess { info ->
+                if (info.synced && info.sync != null) {
+                    isSynced = true
+                    gdriveLink = info.sync.gdriveLink.ifBlank { "https://drive.google.com/drive/folders/${info.sync.gdriveFolderId}" }
+                    gdriveStatus = if (info.sync.syncStatus == "PAUSED") "PAUSED" else if (info.sync.syncStatus == "SYNCING") "SYNCING" else "READY"
+                } else {
+                    isSynced = false
+                    gdriveStatus = "NOT_INITIALIZED"
+                }
+            }
+
+            val result = DualShareLinks(
+                title = "Folder: $sessionId",
+                hellomyphotosUrl = hellomyphotosLink,
+                gdriveUrl = gdriveLink,
+                isGDriveSynced = isSynced,
+                gdriveStatus = gdriveStatus,
+                isLoading = false
+            )
+            withContext(Dispatchers.Main) {
+                onResult(result)
+            }
+        }
+    }
+
+    fun fetchPhotoShareLinks(photo: PhotoItem, onResult: (DualShareLinks) -> Unit) {
+        viewModelScope.launch {
+            var hellomyphotosLink: String? = null
+            var gdriveLink: String? = null
+            var isSynced = false
+            var gdriveStatus = "NOT_INITIALIZED"
+
+            // Check if folder itself has GDrive initialized
+            val folderGdriveRes = uploadManager.apiClient.fetchFolderGDriveSync(sessionId)
+            val folderIsSynced = folderGdriveRes.getOrNull()?.synced == true
+
+            // Resolve server media id if not already known
+            var mediaId = photo.serverMediaId
+            if (mediaId == null) {
+                val serverPhotos = uploadManager.apiClient.fetchSessionPhotos(sessionId, view = "all")
+                val matched = serverPhotos.find {
+                    it.fileName.equals(photo.fileName, ignoreCase = true) ||
+                            it.fileName.equals(photo.fileName.replace(Regex("\\.arw$", RegexOption.IGNORE_CASE), ".jpg"), ignoreCase = true)
+                }
+                if (matched != null) {
+                    mediaId = matched.id
+                }
+            }
+
+            if (mediaId != null) {
+                // 1. Create or fetch single photo share link on Hellomyphotos
+                val shareRes = uploadManager.apiClient.createMediaShareLink(sessionId, mediaId)
+                shareRes.onSuccess {
+                    hellomyphotosLink = it.shareUrl
+                }
+
+                // 2. Check Google Drive sync for this specific photo
+                if (folderIsSynced) {
+                    val mediaGdriveRes = uploadManager.apiClient.fetchMediaGDriveLink(mediaId)
+                    mediaGdriveRes.onSuccess { mLink ->
+                        if (mLink.synced && !mLink.link.isNullOrBlank()) {
+                            isSynced = true
+                            gdriveLink = mLink.link
+                            gdriveStatus = "READY"
+                        } else {
+                            isSynced = false
+                            gdriveStatus = "SYNCING" // Folder is connected, photo is being processed / queued
+                        }
+                    }
+                } else {
+                    isSynced = false
+                    gdriveStatus = "NOT_INITIALIZED"
+                }
+            } else {
+                // Photo hasn't been uploaded to server yet
+                gdriveStatus = if (folderIsSynced) "NOT_UPLOADED" else "NOT_INITIALIZED"
+            }
+
+            val result = DualShareLinks(
+                title = photo.fileName,
+                hellomyphotosUrl = hellomyphotosLink,
+                gdriveUrl = gdriveLink,
+                isGDriveSynced = isSynced,
+                gdriveStatus = gdriveStatus,
+                isLoading = false,
+                errorMessage = if (mediaId == null) "Photo not uploaded to server yet" else null
+            )
+            withContext(Dispatchers.Main) {
+                onResult(result)
+            }
+        }
     }
 
     fun clearShareSession() {
