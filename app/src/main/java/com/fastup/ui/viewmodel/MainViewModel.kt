@@ -185,6 +185,11 @@ class MainViewModel : ViewModel() {
 
     val currentSessionId: StateFlow<String> = uploadManager.currentSessionIdFlow
     val scopes: StateFlow<List<String>> = uploadManager.scopesFlow
+    val networkSimulation: StateFlow<com.fastup.model.NetworkSimulationConfig> = uploadManager.networkSimulationFlow
+
+    fun updateNetworkSimulation(config: com.fastup.model.NetworkSimulationConfig) {
+        uploadManager.updateNetworkSimulation(config)
+    }
 
     var sessionId: String
         get() = uploadManager.currentSessionId
@@ -324,6 +329,116 @@ class MainViewModel : ViewModel() {
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StorageFacts())
 
+    val activeIssues: StateFlow<List<SystemIssue>> = kotlinx.coroutines.flow.combine(
+        cameraState,
+        deviceTransferStats,
+        serverConnectionState,
+        isUploadPaused,
+        photos
+    ) { camState, devStats, srvState, paused, photoList ->
+        val issues = mutableListOf<SystemIssue>()
+        val failedPhotos = photoList.count { it.status == UploadStatus.FAILED }
+        val pendingPhotos = photoList.count { it.status == UploadStatus.PENDING || it.status == UploadStatus.UPLOADING }
+
+        // --- LOCAL ISSUES ---
+        if (camState == CameraConnectionState.ERROR) {
+            issues.add(
+                SystemIssue(
+                    id = "cam_error",
+                    type = IssueType.LOCAL,
+                    severity = IssueSeverity.ERROR,
+                    title = "Camera USB Error",
+                    message = "PTP protocol error communicating with camera over USB.",
+                    actionLabel = "Reconnect Camera",
+                    actionType = IssueActionType.RECONNECT_CAMERA
+                )
+            )
+        } else if (camState == CameraConnectionState.DISCONNECTED && (devStats.totalCaptured > 0 || photoList.isNotEmpty())) {
+            issues.add(
+                SystemIssue(
+                    id = "cam_disconnected",
+                    type = IssueType.LOCAL,
+                    severity = IssueSeverity.WARNING,
+                    title = "Camera Disconnected",
+                    message = "Sony camera USB tether cable is unplugged.",
+                    actionLabel = "Reconnect Camera",
+                    actionType = IssueActionType.RECONNECT_CAMERA
+                )
+            )
+        }
+
+        if (devStats.failedTransfer > 0) {
+            issues.add(
+                SystemIssue(
+                    id = "dev_transfer_failed",
+                    type = IssueType.LOCAL,
+                    severity = IssueSeverity.ERROR,
+                    title = "Local Transfer Failed (${devStats.failedTransfer})",
+                    message = "${devStats.failedTransfer} photo(s) failed transferring from camera over USB.",
+                    actionLabel = "Retry Transfer",
+                    actionType = IssueActionType.RECONNECT_CAMERA
+                )
+            )
+        }
+
+        // --- UPLOAD ISSUES ---
+        if (srvState == ServerConnectionState.ERROR) {
+            issues.add(
+                SystemIssue(
+                    id = "srv_auth_expired",
+                    type = IssueType.UPLOAD,
+                    severity = IssueSeverity.ERROR,
+                    title = "Session Expired / Auth Error",
+                    message = "Photographer token expired (HTTP 401/403). Re-pair via 6-digit OTP code.",
+                    actionLabel = "Pair via OTP",
+                    actionType = IssueActionType.REPAIR_OTP
+                )
+            )
+        } else if (srvState == ServerConnectionState.DISCONNECTED) {
+            issues.add(
+                SystemIssue(
+                    id = "srv_offline",
+                    type = IssueType.UPLOAD,
+                    severity = IssueSeverity.ERROR,
+                    title = "Server Offline / Unreachable",
+                    message = "Cannot reach server at ${uploadManager.serverUrl}. Check Wi-Fi & IP.",
+                    actionLabel = "Test Connection",
+                    actionType = IssueActionType.TEST_CONNECTION
+                )
+            )
+        }
+
+        if (failedPhotos > 0) {
+            issues.add(
+                SystemIssue(
+                    id = "upload_failed",
+                    type = IssueType.UPLOAD,
+                    severity = IssueSeverity.ERROR,
+                    title = "Upload Failures ($failedPhotos)",
+                    message = "$failedPhotos photo(s) failed uploading to the server.",
+                    actionLabel = "Retry All ($failedPhotos)",
+                    actionType = IssueActionType.RETRY_UPLOADS
+                )
+            )
+        }
+
+        if (paused && pendingPhotos > 0) {
+            issues.add(
+                SystemIssue(
+                    id = "upload_paused",
+                    type = IssueType.UPLOAD,
+                    severity = IssueSeverity.WARNING,
+                    title = "Upload Pipeline Paused",
+                    message = "Uploads paused with $pendingPhotos photo(s) waiting in queue.",
+                    actionLabel = "Resume Uploads",
+                    actionType = IssueActionType.RESUME_UPLOADS
+                )
+            )
+        }
+
+        issues
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     fun checkServerStorage() {
         viewModelScope.launch {
             val res = uploadManager.apiClient.fetchServerStorageAvailable()
@@ -401,6 +516,14 @@ class MainViewModel : ViewModel() {
 
     fun retryFailed() {
         uploadManager.retryFailed()
+    }
+
+    fun forceUploadPending(): Int {
+        return uploadManager.forceUploadPending()
+    }
+
+    fun retryAll(includeCompleted: Boolean = false): Int {
+        return uploadManager.retryAll(includeCompleted)
     }
 
     fun retryPhoto(id: String) {
@@ -615,6 +738,24 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             val success = uploadManager.clearLocalStorage(folderId)
             onDone(success)
+        }
+    }
+
+    private val _otpDialogServerPing = MutableStateFlow<Result<Boolean>?>(null)
+    val otpDialogServerPing: StateFlow<Result<Boolean>?> = _otpDialogServerPing.asStateFlow()
+
+    private val _isTestingOtpConnection = MutableStateFlow(false)
+    val isTestingOtpConnection: StateFlow<Boolean> = _isTestingOtpConnection.asStateFlow()
+
+    fun testServerReachability(targetUrl: String? = null, onDone: ((Boolean) -> Unit)? = null) {
+        val url = targetUrl ?: serverUrl
+        _isTestingOtpConnection.value = true
+        _otpDialogServerPing.value = null
+        viewModelScope.launch {
+            val res = uploadManager.pingServer(url)
+            _otpDialogServerPing.value = res
+            _isTestingOtpConnection.value = false
+            onDone?.invoke(res.isSuccess)
         }
     }
 

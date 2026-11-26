@@ -3,6 +3,8 @@ package com.fastup.ui.settings
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
@@ -57,15 +59,29 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var isPairing by remember { mutableStateOf(false) }
     var pairErrorMessage by remember { mutableStateOf<String?>(null) }
     val serverState by viewModel.serverConnectionState.collectAsState()
+    val isTestingOtpConnection by viewModel.isTestingOtpConnection.collectAsState()
+    val otpDialogServerPing by viewModel.otpDialogServerPing.collectAsState()
+    var pairServerUrl by remember(viewModel.serverUrl) { mutableStateOf(viewModel.serverUrl) }
+
+    LaunchedEffect(showPairDialog) {
+        if (showPairDialog) {
+            pairServerUrl = viewModel.serverUrl
+            pairErrorMessage = null
+            pairOtpCode = ""
+            viewModel.testServerReachability(viewModel.serverUrl)
+        }
+    }
 
     var urlInput by remember { mutableStateOf(viewModel.serverUrl) }
     var selectedCameraFormat by remember { mutableStateOf(viewModel.cameraCaptureFormat) }
     var selectedFormat by remember { mutableStateOf(viewModel.uploadFormat) }
     var autoUpload by remember { mutableStateOf(viewModel.autoUpload) }
     var wifiOnly by remember { mutableStateOf(viewModel.wifiOnly) }
+    val netSim by viewModel.networkSimulation.collectAsState()
 
     var showCameraGuide by remember { mutableStateOf(false) }
     var showBatteryGuide by remember { mutableStateOf(false) }
+    var showBackgroundGuide by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.refreshLocalFolders()
@@ -138,7 +154,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         val (statusText, statusBg, statusColor) = when (serverState) {
                             ServerConnectionState.CONNECTED -> Triple("Online", Emerald500.copy(alpha = 0.18f), Emerald500)
                             ServerConnectionState.CONNECTING -> Triple("Connecting", Blue500.copy(alpha = 0.18f), Blue500)
-                            ServerConnectionState.ERROR -> Triple("Error", Rose500.copy(alpha = 0.18f), Rose500)
+                            ServerConnectionState.ERROR -> Triple("Session Expired", Amber500.copy(alpha = 0.18f), Amber500)
                             else -> Triple("Offline", Slate600.copy(alpha = 0.35f), Slate400)
                         }
 
@@ -413,11 +429,11 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     },
                     enabled = failedCount > 0,
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = if (failedCount > 0) Amber500.copy(alpha = 0.15f) else Color.Transparent,
-                        contentColor = if (failedCount > 0) Amber500 else Slate400,
+                        containerColor = if (failedCount > 0) Rose500.copy(alpha = 0.15f) else Color.Transparent,
+                        contentColor = if (failedCount > 0) Rose500 else Slate400,
                         disabledContentColor = Slate600
                     ),
-                    border = BorderStroke(1.dp, if (failedCount > 0) Amber500 else Slate700),
+                    border = BorderStroke(1.dp, if (failedCount > 0) Rose500 else Slate700),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(44.dp),
@@ -431,6 +447,37 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (failedCount > 0) "Retry All Failed Uploads ($failedCount)" else "No Failed Uploads",
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // Force Upload Pending Photos Button
+                val pendingCount = remember(photos) { photos.count { it.status == com.fastup.model.UploadStatus.PENDING || it.status == com.fastup.model.UploadStatus.UPLOADING } }
+                Button(
+                    onClick = {
+                        val count = viewModel.forceUploadPending()
+                        Toast.makeText(context, "Force uploading $count pending photo(s)...", Toast.LENGTH_SHORT).show()
+                    },
+                    enabled = pendingCount > 0,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Amber500,
+                        contentColor = Slate900,
+                        disabledContainerColor = Slate800,
+                        disabledContentColor = Slate600
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CloudUpload,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (pendingCount > 0) "Force Upload Pending ($pendingCount)" else "No Photos Pending",
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -714,6 +761,193 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
+        // Network Simulation & Resilience Testing Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Slate800),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "Network Simulation",
+                                color = Slate100,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 16.sp
+                            )
+                            if (netSim.enabled) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(Amber500.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text("TESTING", color = Amber400, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                        Text(
+                            text = "Simulate poor networks, packet loss & speed limits",
+                            color = Slate400,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Switch(
+                        checked = netSim.enabled,
+                        onCheckedChange = {
+                            viewModel.updateNetworkSimulation(netSim.copy(enabled = it))
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Amber500,
+                            checkedTrackColor = Amber500.copy(alpha = 0.35f)
+                        )
+                    )
+                }
+
+                if (netSim.enabled) {
+                    // Active Simulation Summary Banner
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Amber500.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Amber400,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Active: ${netSim.latencyMs}ms delay • ${netSim.dropRatePercent}% drop • ${if (netSim.throttleKbps > 0) "${netSim.throttleKbps} KB/s" else "Unlimited"}",
+                            color = Amber400,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    // Presets
+                    Text("Presets", color = Slate300, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val presets = listOf(
+                            "Crowded Wi-Fi" to com.fastup.model.NetworkSimulationConfig.CROWDED_WIFI,
+                            "3G Remote" to com.fastup.model.NetworkSimulationConfig.HIGH_LATENCY_3G,
+                            "2G / Edge" to com.fastup.model.NetworkSimulationConfig.VERY_SLOW_2G
+                        )
+                        presets.forEach { (name, cfg) ->
+                            val isSelected = netSim.profile == cfg.profile
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { viewModel.updateNetworkSimulation(cfg) },
+                                label = { Text(name, fontSize = 11.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Blue600,
+                                    selectedLabelColor = Color.White,
+                                    containerColor = Slate900,
+                                    labelColor = Slate300
+                                ),
+                                border = BorderStroke(1.dp, if (isSelected) Blue500 else Slate700)
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = Slate700, thickness = 1.dp)
+
+                    // Sliders
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Artificial Delay / Latency", color = Slate300, fontSize = 13.sp)
+                            Text("${netSim.latencyMs} ms", color = Blue400, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Slider(
+                            value = netSim.latencyMs.toFloat(),
+                            onValueChange = {
+                                viewModel.updateNetworkSimulation(netSim.copy(profile = "CUSTOM", latencyMs = it.toLong()))
+                            },
+                            valueRange = 0f..2500f,
+                            steps = 24,
+                            colors = SliderDefaults.colors(thumbColor = Blue500, activeTrackColor = Blue500)
+                        )
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Simulated Packet Loss (Drop Rate)", color = Slate300, fontSize = 13.sp)
+                            Text("${netSim.dropRatePercent}%", color = if (netSim.dropRatePercent > 0) Rose500 else Slate400, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Slider(
+                            value = netSim.dropRatePercent.toFloat(),
+                            onValueChange = {
+                                viewModel.updateNetworkSimulation(netSim.copy(profile = "CUSTOM", dropRatePercent = it.toInt()))
+                            },
+                            valueRange = 0f..50f,
+                            steps = 9,
+                            colors = SliderDefaults.colors(thumbColor = Rose500, activeTrackColor = Rose500)
+                        )
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Bandwidth Speed Cap", color = Slate300, fontSize = 13.sp)
+                            Text(
+                                if (netSim.throttleKbps == 0L) "Unlimited" else "${netSim.throttleKbps} KB/s",
+                                color = Emerald400,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Slider(
+                            value = (netSim.throttleKbps.toFloat() / 50f).coerceIn(0f, 40f),
+                            onValueChange = {
+                                val kbps = (it.toLong() * 50L)
+                                viewModel.updateNetworkSimulation(netSim.copy(profile = "CUSTOM", throttleKbps = kbps))
+                            },
+                            valueRange = 0f..40f,
+                            steps = 39,
+                            colors = SliderDefaults.colors(thumbColor = Emerald500, activeTrackColor = Emerald500)
+                        )
+                    }
+
+                    Text(
+                        text = "💡 FastUp automatically retries transient drops with jittered exponential backoff. Partially-written files are discarded atomically on the server.",
+                        color = Slate400,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+            }
+        }
+
         // Local Storage Management Card (Clear Local Storage)
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -990,6 +1224,161 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
+        // Screen-Off & Background Shooting Guide Card (Collapsible, Minimized by Default)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { showBackgroundGuide = !showBackgroundGuide },
+            colors = CardDefaults.cardColors(containerColor = Slate800),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Slate700)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ScreenLockPortrait,
+                            contentDescription = null,
+                            tint = Blue400,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Screen-Off & Background Shooting",
+                                color = Slate100,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                            if (!showBackgroundGuide) {
+                                Text(
+                                    text = "Background tether & sleep guide (tap to expand)",
+                                    color = Slate400,
+                                    fontSize = 11.5.sp
+                                )
+                            }
+                        }
+                    }
+                    IconButton(onClick = { showBackgroundGuide = !showBackgroundGuide }) {
+                        Icon(
+                            imageVector = if (showBackgroundGuide) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (showBackgroundGuide) "Collapse" else "Expand",
+                            tint = Slate400
+                        )
+                    }
+                }
+
+                AnimatedVisibility(visible = showBackgroundGuide) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "FastUp runs a continuous Foreground Service and holds a CPU WakeLock so photo tethering and auto-upload continue seamlessly while your phone's screen is off or in your pocket.",
+                            color = Slate300,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp
+                        )
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Slate900.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .offset(y = 6.dp)
+                                        .background(Blue400, CircleShape)
+                                )
+                                Text(
+                                    text = "Step 1: Set App Battery to \"Unrestricted\" in Phone Settings → Apps → FastUp → Battery (prevents Android / One UI from sleeping the tethering service).",
+                                    color = Slate200,
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .offset(y = 6.dp)
+                                        .background(Blue400, CircleShape)
+                                )
+                                Text(
+                                    text = "Step 2: Allow Background Mobile Data under Apps → FastUp → Mobile Data (ensures uploads continue over cellular when screen is locked).",
+                                    color = Slate200,
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .offset(y = 6.dp)
+                                        .background(Blue400, CircleShape)
+                                )
+                                Text(
+                                    text = "Step 3: Keep USB connected — once tethered, you can turn off the screen. Photos transfer & upload in the background.",
+                                    color = Blue400,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                try {
+                                    val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                        data = Uri.fromParts("package", context.packageName, null)
+                                    }
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {}
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Slate700),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp), tint = Slate200)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Open App System Settings", color = Slate200, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        Text(
+                            text = "💡 Tip: If the USB cable is disconnected while the screen is off, Android security will require unlocking your phone once upon reconnect to grant USB access.",
+                            color = Slate400,
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+        }
+
         // Confirmation Dialog for Clearing Local Storage
         if (showClearDialog && selectedFolder != null) {
             AlertDialog(
@@ -1048,53 +1437,67 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             fontSize = 13.sp
                         )
 
+                        OutlinedTextField(
+                            value = pairServerUrl,
+                            onValueChange = {
+                                pairServerUrl = it
+                                pairErrorMessage = null
+                                viewModel.testServerReachability(it)
+                            },
+                            label = { Text("Server URL") },
+                            placeholder = { Text("http://192.168.1.50:8000") },
+                            singleLine = true,
+                            trailingIcon = {
+                                IconButton(
+                                    onClick = { viewModel.testServerReachability(pairServerUrl) }
+                                ) {
+                                    if (isTestingOtpConnection) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Blue400, strokeWidth = 2.dp)
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = "Test connection",
+                                            tint = Blue400,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Blue500,
+                                unfocusedBorderColor = Slate600,
+                                focusedTextColor = Slate100,
+                                unfocusedTextColor = Slate100
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        val (probeText, probeBg, probeColor) = when {
+                            isTestingOtpConnection -> Triple("Testing connection...", Blue500.copy(alpha = 0.15f), Blue400)
+                            otpDialogServerPing?.isSuccess == true -> Triple("● Server Reachable & Ready", Emerald500.copy(alpha = 0.15f), Emerald500)
+                            otpDialogServerPing?.isFailure == true -> Triple("● Server Unreachable (Check IP/Wi-Fi)", Rose500.copy(alpha = 0.15f), Rose500)
+                            else -> Triple("Testing connection...", Slate600.copy(alpha = 0.2f), Slate400)
+                        }
+
                         Surface(
-                            color = Slate900,
+                            color = probeBg,
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Cloud,
-                                    contentDescription = null,
-                                    tint = Blue400,
-                                    modifier = Modifier.size(16.dp)
+                                if (isTestingOtpConnection) {
+                                    CircularProgressIndicator(modifier = Modifier.size(12.dp), color = probeColor, strokeWidth = 1.5.dp)
+                                }
+                                Text(
+                                    text = probeText,
+                                    color = probeColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
                                 )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Connecting to Server:",
-                                        color = Slate400,
-                                        fontSize = 11.sp
-                                    )
-                                    Text(
-                                        text = viewModel.serverUrl,
-                                        color = Slate200,
-                                        fontSize = 12.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                                val (probeText, probeColor) = when (serverState) {
-                                    ServerConnectionState.CONNECTED -> Pair("Online", Emerald500)
-                                    ServerConnectionState.CONNECTING -> Pair("Connecting", Blue500)
-                                    else -> Pair("Offline", Slate400)
-                                }
-                                Surface(
-                                    color = probeColor.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = "● $probeText",
-                                        color = probeColor,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
                             }
                         }
 
@@ -1155,13 +1558,15 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             }
                             isPairing = true
                             pairErrorMessage = null
-                            viewModel.pairWithOtp(viewModel.serverUrl.trim(), pairOtpCode.trim()) { res ->
+                            val cleanTargetUrl = pairServerUrl.trim().trimEnd('/')
+                            viewModel.serverUrl = cleanTargetUrl
+                            urlInput = cleanTargetUrl
+                            viewModel.pairWithOtp(cleanTargetUrl, pairOtpCode.trim()) { res ->
                                 isPairing = false
                                 res.onSuccess { pName ->
                                     showPairDialog = false
                                     pairErrorMessage = null
                                     pairOtpCode = ""
-                                    urlInput = viewModel.serverUrl
                                     selectedFormat = viewModel.uploadFormat
                                     autoUpload = viewModel.autoUpload
                                     wifiOnly = viewModel.wifiOnly

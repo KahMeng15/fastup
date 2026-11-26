@@ -1,6 +1,7 @@
 package com.fastup.ui.gallery
 
 import android.content.res.Configuration
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -219,19 +220,47 @@ fun PhotoMetadataCard(
                 )
             }
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Upload Status", color = Slate400, fontSize = 13.sp)
-                Text(
-                    photo.status.name,
-                    color = when (photo.status) {
-                        UploadStatus.COMPLETED -> Emerald500
-                        UploadStatus.UPLOADING -> Blue500
-                        UploadStatus.PENDING -> Amber500
-                        UploadStatus.FAILED -> Rose500
-                    },
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        photo.status.name,
+                        color = when (photo.status) {
+                            UploadStatus.COMPLETED -> Emerald500
+                            UploadStatus.UPLOADING -> Blue500
+                            UploadStatus.PENDING -> Amber500
+                            UploadStatus.FAILED -> Rose500
+                        },
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                    if (photo.status != UploadStatus.UPLOADING) {
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.retryPhoto(photo.id)
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp),
+                            shape = RoundedCornerShape(6.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (photo.status == UploadStatus.PENDING) Amber500 else Blue400
+                            ),
+                            border = BorderStroke(1.dp, if (photo.status == UploadStatus.PENDING) Amber500 else Blue400)
+                        ) {
+                            Icon(
+                                imageVector = if (photo.status == UploadStatus.PENDING) Icons.Default.CloudUpload else Icons.Default.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                if (photo.status == UploadStatus.PENDING) "Upload Now" else "Retry",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
             }
 
             if (photo.burstGroupId != null || photo.burstCount > 1) {

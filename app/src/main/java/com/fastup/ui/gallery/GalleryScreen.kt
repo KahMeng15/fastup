@@ -1,6 +1,7 @@
 package com.fastup.ui.gallery
 
 import android.content.res.Configuration
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,6 +21,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -34,10 +36,18 @@ fun GalleryScreen(
     viewModel: MainViewModel,
     onPhotoClick: (String) -> Unit
 ) {
+    val context = LocalContext.current
     val photos by viewModel.photos.collectAsState()
+    val isUploading by viewModel.isUploading.collectAsState()
+    val isUploadPaused by viewModel.isUploadPaused.collectAsState()
     val curationMode by viewModel.curationViewMode.collectAsState()
     val isSyncingCuration by viewModel.isSyncingCuration.collectAsState()
     var showShareFolderDialog by remember { mutableStateOf(false) }
+
+    val pendingCount = remember(photos) { photos.count { it.status == UploadStatus.PENDING || it.status == UploadStatus.UPLOADING } }
+    val failedCount = remember(photos) { photos.count { it.status == UploadStatus.FAILED } }
+    val uncompletedCount = pendingCount + failedCount
+
     val displayedPhotos = if (curationMode == "curated") {
         photos.filter { it.isHero || it.burstGroupId == null }
     } else {
@@ -130,11 +140,11 @@ fun GalleryScreen(
             }
         }
 
-        // Lower Sub-header: Folder Name & Share Link Action
+        // Lower Sub-header: Folder Name, Retry Upload All & Share Link Action
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 10.dp)
+                .padding(bottom = 8.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color(0xFF1E293B).copy(alpha = 0.6f))
                 .border(1.dp, Color(0xFF334155), RoundedCornerShape(8.dp))
@@ -163,19 +173,131 @@ fun GalleryScreen(
                 )
             }
 
-            FilledTonalButton(
-                onClick = { showShareFolderDialog = true },
-                shape = RoundedCornerShape(6.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = Blue600.copy(alpha = 0.25f),
-                    contentColor = Blue400
-                ),
-                modifier = Modifier.height(26.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(12.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Share Folder", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                // Retry Upload All Button
+                FilledTonalButton(
+                    onClick = {
+                        val count = viewModel.retryAll(includeCompleted = uncompletedCount == 0)
+                        val msg = if (count > 0) {
+                            "Retrying $count uploads (including pending)..."
+                        } else {
+                            "All photos already uploaded"
+                        }
+                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = when {
+                            failedCount > 0 -> Rose500.copy(alpha = 0.22f)
+                            uncompletedCount > 0 -> Amber500.copy(alpha = 0.22f)
+                            else -> Emerald500.copy(alpha = 0.22f)
+                        },
+                        contentColor = when {
+                            failedCount > 0 -> Rose400
+                            uncompletedCount > 0 -> Amber400
+                            else -> Emerald400
+                        }
+                    ),
+                    modifier = Modifier.height(26.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isUploading) Icons.Default.Sync else Icons.Default.CloudUpload,
+                        contentDescription = "Retry Upload All",
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = when {
+                            isUploading -> "Uploading..."
+                            uncompletedCount > 0 -> "Retry All ($uncompletedCount)"
+                            else -> "Retry All"
+                        },
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                FilledTonalButton(
+                    onClick = { showShareFolderDialog = true },
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = Blue600.copy(alpha = 0.25f),
+                        contentColor = Blue400
+                    ),
+                    modifier = Modifier.height(26.dp)
+                ) {
+                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(12.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Share Folder", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        // Uncompleted Uploads Status Strip (visible when pending or failed items exist)
+        if (uncompletedCount > 0) {
+            Surface(
+                color = if (failedCount > 0) Rose500.copy(alpha = 0.15f) else Color(0xFF1E293B),
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, if (failedCount > 0) Rose500.copy(alpha = 0.4f) else Color(0xFF334155)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (failedCount > 0) Icons.Default.Warning else Icons.Default.CloudQueue,
+                            contentDescription = null,
+                            tint = if (failedCount > 0) Rose400 else Amber400,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = buildString {
+                                if (failedCount > 0) append("$failedCount failed")
+                                if (failedCount > 0 && pendingCount > 0) append(" • ")
+                                if (pendingCount > 0) append("$pendingCount pending")
+                                if (isUploadPaused) append(" (Paused)")
+                            },
+                            color = if (failedCount > 0) Rose400 else Slate200,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    TextButton(
+                        onClick = {
+                            val count = viewModel.retryAll(includeCompleted = false)
+                            android.widget.Toast.makeText(
+                                context,
+                                "Retrying $count uploads (including pending)...",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                        modifier = Modifier.height(24.dp)
+                    ) {
+                        Text(
+                            text = "Retry All Now",
+                            color = if (failedCount > 0) Rose400 else Blue400,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
 

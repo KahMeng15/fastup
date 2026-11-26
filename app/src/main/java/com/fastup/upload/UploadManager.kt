@@ -75,6 +75,29 @@ class UploadManager(private val context: Context) {
         scopes = clean
     }
 
+    private val _networkSimulation = MutableStateFlow(
+        com.fastup.model.NetworkSimulationConfig(
+            enabled = prefs.getBoolean(PREF_NET_SIM_ENABLED, false),
+            profile = prefs.getString(PREF_NET_SIM_PROFILE, "OFF") ?: "OFF",
+            latencyMs = prefs.getLong(PREF_NET_SIM_LATENCY_MS, 0L),
+            dropRatePercent = prefs.getInt(PREF_NET_SIM_DROP_RATE, 0),
+            throttleKbps = prefs.getLong(PREF_NET_SIM_THROTTLE_KBPS, 0L)
+        )
+    )
+    val networkSimulationFlow: StateFlow<com.fastup.model.NetworkSimulationConfig> = _networkSimulation.asStateFlow()
+
+    fun updateNetworkSimulation(config: com.fastup.model.NetworkSimulationConfig) {
+        _networkSimulation.value = config
+        apiClient.networkSimulation = config
+        prefs.edit()
+            .putBoolean(PREF_NET_SIM_ENABLED, config.enabled)
+            .putString(PREF_NET_SIM_PROFILE, config.profile)
+            .putLong(PREF_NET_SIM_LATENCY_MS, config.latencyMs)
+            .putInt(PREF_NET_SIM_DROP_RATE, config.dropRatePercent)
+            .putLong(PREF_NET_SIM_THROTTLE_KBPS, config.throttleKbps)
+            .apply()
+    }
+
     fun isFolderWritable(folderPath: String): Boolean {
         val clean = folderPath.trim().trim('/')
         // Root is NEVER writable (users cannot write directly to root parent folder)
@@ -183,8 +206,11 @@ class UploadManager(private val context: Context) {
 
     // Internal Upload Queue
     private val pendingQueue = ConcurrentLinkedQueue<String>() // photo IDs
+    private val retryAttempts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private var autoRetryJob: Job? = null
 
     init {
+        apiClient.networkSimulation = _networkSimulation.value
         scanExistingCaptures()
         refreshLocalFolders()
         syncUploadedFilesWithServer()
@@ -204,21 +230,55 @@ class UploadManager(private val context: Context) {
         }
     }
 
+    suspend fun pingServer(targetUrl: String? = null): Result<Boolean> {
+        return apiClient.pingServer(targetUrl)
+    }
+
     fun checkServerConnection(onResult: ((Boolean) -> Unit)? = null) {
         scope.launch {
             _serverConnectionState.value = ServerConnectionState.CONNECTING
             val res = apiClient.checkConnection()
             res.onSuccess {
                 _serverConnectionState.value = ServerConnectionState.CONNECTED
+                com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_disconnected")
+                com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_auth_expired")
                 onResult?.invoke(true)
-            }.onFailure {
-                _serverConnectionState.value = ServerConnectionState.DISCONNECTED
+            }.onFailure { err ->
+                val msg = err.message ?: ""
+                if (msg.contains("AUTH_EXPIRED") || msg.contains("401") || msg.contains("403")) {
+                    _serverConnectionState.value = ServerConnectionState.ERROR
+                    com.fastup.util.IssueAlertNotifier.notifyIssue(
+                        context = context,
+                        issueKey = "server_auth_expired",
+                        title = "FastUp Session Expired",
+                        message = "Photographer token expired (HTTP 401). Tap to re-pair via OTP.",
+                        isError = true
+                    )
+                } else {
+                    _serverConnectionState.value = ServerConnectionState.DISCONNECTED
+                    com.fastup.util.IssueAlertNotifier.notifyIssue(
+                        context = context,
+                        issueKey = "server_disconnected",
+                        title = "FastUp Server Offline",
+                        message = "Cannot reach server at $serverUrl. Check Wi-Fi & IP.",
+                        isError = true
+                    )
+                }
                 onResult?.invoke(false)
             }
         }
     }
 
+    private var debounceSyncJob: Job? = null
+    private var lastSyncTime = 0L
+
     fun syncUploadedFilesWithServer(onComplete: (() -> Unit)? = null) {
+        val now = System.currentTimeMillis()
+        // Throttle server photo syncs to at most once every 5 seconds to preserve socket bandwidth during active uploads
+        if (now - lastSyncTime < 5000L && onComplete == null) {
+            return
+        }
+        lastSyncTime = now
         scope.launch {
             try {
                 val serverPhotos = apiClient.fetchSessionPhotos(currentSessionId, view = "all")
@@ -423,8 +483,73 @@ class UploadManager(private val context: Context) {
         val failed = _photos.value.filter { it.status == UploadStatus.FAILED }
         Log.i(TAG, "Retrying ${failed.size} failed uploads...")
         for (item in failed) {
+            retryAttempts.remove(item.id)
             enqueue(item.id, force = true)
         }
+    }
+
+    /**
+     * Called whenever any upload completes successfully.
+     * Since the network pipeline is demonstrably functional, any other pending or stalled photos
+     * in the queue are accelerated and re-enqueued if not already queued.
+     */
+    private fun scheduleAutoRetryPending() {
+        autoRetryJob?.cancel()
+        autoRetryJob = scope.launch {
+            kotlinx.coroutines.delay(1000)
+            if (_isUploadPaused.value) return@launch
+            val pendingPhotos = _photos.value.filter { it.status == UploadStatus.PENDING }
+            var readdedCount = 0
+            for (photo in pendingPhotos) {
+                if (!pendingQueue.contains(photo.id)) {
+                    pendingQueue.add(photo.id)
+                    readdedCount++
+                }
+            }
+            if (readdedCount > 0) {
+                Log.i(TAG, "Healthy upload detected: automatically re-enqueued $readdedCount pending photo(s) to worker queue.")
+            }
+        }
+    }
+
+    /**
+     * Force re-enqueues all photos currently in PENDING state.
+     * Clears and resets pendingQueue to guarantee no orphaned/stuck items.
+     * Resumes worker if paused.
+     */
+    fun forceUploadPending(): Int {
+        if (_isUploadPaused.value) {
+            _isUploadPaused.value = false
+            prefs.edit().putBoolean(PREF_UPLOAD_PAUSED, false).apply()
+        }
+        val pendingPhotos = _photos.value.filter { it.status == UploadStatus.PENDING }
+        Log.i(TAG, "Force re-enqueuing ${pendingPhotos.size} pending photo(s)...")
+        pendingQueue.clear()
+        for (item in pendingPhotos) {
+            retryAttempts.remove(item.id)
+            pendingQueue.add(item.id)
+        }
+        triggerNext()
+        return pendingPhotos.size
+    }
+
+    fun retryAll(includeCompleted: Boolean = false): Int {
+        if (_isUploadPaused.value) {
+            _isUploadPaused.value = false
+            prefs.edit().putBoolean(PREF_UPLOAD_PAUSED, false).apply()
+        }
+        val targetPhotos = if (includeCompleted) {
+            _photos.value
+        } else {
+            _photos.value.filter { it.status != UploadStatus.COMPLETED }
+        }
+        Log.i(TAG, "Retrying/enqueuing ${targetPhotos.size} uploads (includeCompleted=$includeCompleted)...")
+        for (item in targetPhotos) {
+            retryAttempts.remove(item.id)
+            enqueue(item.id, force = true)
+        }
+        triggerNext()
+        return targetPhotos.size
     }
 
     fun retryPhoto(id: String) {
@@ -432,13 +557,17 @@ class UploadManager(private val context: Context) {
             _isUploadPaused.value = false
             prefs.edit().putBoolean(PREF_UPLOAD_PAUSED, false).apply()
         }
+        retryAttempts.remove(id)
         enqueue(id, force = true)
     }
 
     private fun canUploadNow(): Boolean {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return true
-        val activeNetwork = cm.activeNetwork ?: return true
-        val caps = cm.getNetworkCapabilities(activeNetwork) ?: return true
+        val activeNetwork = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(activeNetwork) ?: return false
+
+        val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        if (!hasInternet) return false
 
         if (wifiOnly) {
             val isWifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
@@ -468,9 +597,11 @@ class UploadManager(private val context: Context) {
                 }
 
                 if (!canUploadNow()) {
-                    Log.w(TAG, "Cannot upload now (network constraints / Wi-Fi only: $wifiOnly)")
+                    Log.w(TAG, "Cannot upload now (offline or Wi-Fi only restriction: $wifiOnly)")
+                    _serverConnectionState.value = ServerConnectionState.DISCONNECTED
                     pendingQueue.add(nextId)
                     _isUploading.value = false
+                    _currentSpeedBps.value = 0L
                     kotlinx.coroutines.delay(2000)
                     continue
                 }
@@ -556,65 +687,186 @@ class UploadManager(private val context: Context) {
         var uploadFailed = false
         var failureReason: String? = null
         var lastUploadResponseJson: String? = null
+        val maxAttemptsPerFile = 3
+
+        // Calculate target server folder: if file was stored in a subfolder of tether_captures,
+        // use its relative directory structure; otherwise default to currentSessionId.
+        val baseDir = File(context.getExternalFilesDir(null), "tether_captures")
+        val targetSession = try {
+            val parentDir = currentPhoto.localFile.parentFile
+            if (parentDir != null && baseDir.exists() && parentDir.absolutePath.startsWith(baseDir.absolutePath)) {
+                val rel = parentDir.absolutePath.removePrefix(baseDir.absolutePath).trim('/')
+                if (rel.isNotEmpty()) rel else currentSessionId
+            } else {
+                currentSessionId
+            }
+        } catch (_: Exception) {
+            currentSessionId
+        }
 
         for (fileToUpload in filesToUpload) {
-            var lastTime = System.currentTimeMillis()
-            var lastBytes = 0L
+            var fileSuccess = false
+            var fileAttempt = 0
+            var fileError: String? = null
 
-            val result = apiClient.uploadPhoto(
-                file = fileToUpload,
-                sessionId = currentSessionId
-            ) { bytesWritten, _ ->
-                val now = System.currentTimeMillis()
-                val dt = (now - lastTime).coerceAtLeast(1)
-                val dBytes = bytesWritten - lastBytes
+            while (fileAttempt < maxAttemptsPerFile && !fileSuccess) {
+                if (_isUploadPaused.value) {
+                    Log.i(TAG, "Upload paused by user, halting file transfer")
+                    return
+                }
 
-                if (dt >= 400 || (totalUploadedBytes + bytesWritten) >= totalBatchBytes) {
-                    val speedBps = (dBytes * 1000) / dt
-                    lastTime = now
-                    lastBytes = bytesWritten
+                fileAttempt++
+                var lastTime = System.currentTimeMillis()
+                var lastBytes = 0L
 
-                    _currentSpeedBps.value = speedBps
-                    val overallProgress = ((totalUploadedBytes + bytesWritten).toFloat() / totalBatchBytes).coerceIn(0f, 1f)
+                val result = apiClient.uploadPhoto(
+                    file = fileToUpload,
+                    sessionId = targetSession
+                ) { bytesWritten, _ ->
+                    val now = System.currentTimeMillis()
+                    val dt = (now - lastTime).coerceAtLeast(1)
+                    val dBytes = bytesWritten - lastBytes
 
-                    _photos.update { list ->
-                        list.map {
-                            if (it.id == photoId) it.copy(
-                                uploadProgress = overallProgress,
-                                uploadSpeedBps = speedBps
-                            )
-                            else it
+                    if (dt >= 400 || (totalUploadedBytes + bytesWritten) >= totalBatchBytes) {
+                        val speedBps = (dBytes * 1000) / dt
+                        lastTime = now
+                        lastBytes = bytesWritten
+
+                        _currentSpeedBps.value = speedBps
+                        val overallProgress = ((totalUploadedBytes + bytesWritten).toFloat() / totalBatchBytes).coerceIn(0f, 1f)
+
+                        _photos.update { list ->
+                            list.map {
+                                if (it.id == photoId) it.copy(
+                                    uploadProgress = overallProgress,
+                                    uploadSpeedBps = speedBps,
+                                    errorMessage = if (fileAttempt > 1) "Retrying ($fileAttempt/$maxAttemptsPerFile)..." else null
+                                )
+                                else it
+                            }
                         }
+                    }
+                }
+
+                if (result.isSuccess) {
+                    fileSuccess = true
+                    totalUploadedBytes += fileToUpload.length()
+                    lastUploadResponseJson = result.getOrNull()
+                } else {
+                    fileError = result.exceptionOrNull()?.message ?: "Upload failed"
+                    Log.w(TAG, "Upload attempt $fileAttempt failed for ${fileToUpload.name}: $fileError")
+
+                    // Check if permanent error (e.g. 401 Unauthorized, 403 Forbidden / Scope disallowed)
+                    val isPermanent = fileError.contains("401") || fileError.contains("403") ||
+                            fileError.contains("Forbidden", ignoreCase = true) ||
+                            fileError.contains("Unauthorized", ignoreCase = true) ||
+                            fileError.contains("Outside allowed scope", ignoreCase = true) ||
+                            fileError.contains("session is disabled", ignoreCase = true)
+
+                    if (isPermanent) {
+                        Log.e(TAG, "Permanent upload failure, aborting retries: $fileError")
+                        break
+                    }
+
+                    if (fileAttempt < maxAttemptsPerFile) {
+                        val backoffMs = (1000L * (1 shl (fileAttempt - 1))) + kotlin.random.Random.nextLong(200, 600)
+                        Log.i(TAG, "Transient upload failure, retrying in ${backoffMs}ms (attempt ${fileAttempt + 1}/$maxAttemptsPerFile)...")
+                        _photos.update { list ->
+                            list.map {
+                                if (it.id == photoId) it.copy(
+                                    errorMessage = "Retrying in ${(backoffMs + 500) / 1000}s (attempt ${fileAttempt + 1}/$maxAttemptsPerFile)..."
+                                )
+                                else it
+                            }
+                        }
+                        kotlinx.coroutines.delay(backoffMs)
                     }
                 }
             }
 
-            if (!result.isSuccess) {
+            if (!fileSuccess) {
                 uploadFailed = true
-                failureReason = result.exceptionOrNull()?.message ?: "Upload failed"
+                failureReason = fileError ?: "Upload failed after $fileAttempt attempts"
                 break
-            } else {
-                totalUploadedBytes += fileToUpload.length()
-                lastUploadResponseJson = result.getOrNull()
             }
         }
 
         if (uploadFailed) {
             _serverConnectionState.value = ServerConnectionState.ERROR
-            Log.e(TAG, "Failed uploading ${currentPhoto.fileName}: $failureReason")
-            _photos.update { list ->
-                list.map {
-                    if (it.id == photoId) it.copy(
-                        status = UploadStatus.FAILED,
-                        errorMessage = failureReason ?: "Upload failed",
-                        uploadSpeedBps = 0L
-                    )
-                    else it
+            val attemptsSoFar = (retryAttempts[photoId] ?: 0) + 1
+            retryAttempts[photoId] = attemptsSoFar
+
+            com.fastup.util.IssueAlertNotifier.notifyIssue(
+                context = context,
+                issueKey = "photo_upload_failed_$photoId",
+                title = "Upload Failed: ${currentPhoto.fileName}",
+                message = failureReason ?: "Upload failed after retries. Check server connectivity.",
+                isError = true
+            )
+
+            // Check if permanent error (auth / scope)
+            val isPermanent = failureReason?.let {
+                it.contains("401") || it.contains("403") ||
+                it.contains("Forbidden", ignoreCase = true) ||
+                it.contains("Unauthorized", ignoreCase = true) ||
+                it.contains("Outside allowed scope", ignoreCase = true) ||
+                it.contains("session is disabled", ignoreCase = true)
+            } ?: false
+
+            if (isPermanent) {
+                Log.e(TAG, "Permanent upload failure for ${currentPhoto.fileName}: $failureReason")
+                _photos.update { list ->
+                    list.map {
+                        if (it.id == photoId) it.copy(
+                            status = UploadStatus.FAILED,
+                            errorMessage = failureReason ?: "Permanent upload error",
+                            uploadSpeedBps = 0L
+                        )
+                        else it
+                    }
+                }
+            } else {
+                // Smart auto-recovery: do NOT give up! Mark as PENDING with backoff so the pipeline
+                // can continue uploading other images and automatically retry this one.
+                val backoffSeconds = minOf(300L, 5L * (1L shl minOf(attemptsSoFar - 1, 5))) // 5s, 10s, 20s, 40s, 80s, 160s, max 300s
+                Log.w(TAG, "Transient upload failure for ${currentPhoto.fileName} (cycle $attemptsSoFar). Auto-recovering in ${backoffSeconds}s: $failureReason")
+
+                _photos.update { list ->
+                    list.map {
+                        if (it.id == photoId) it.copy(
+                            status = UploadStatus.PENDING,
+                            errorMessage = "Will retry in ${backoffSeconds}s (fail #${attemptsSoFar})",
+                            uploadSpeedBps = 0L
+                        )
+                        else it
+                    }
+                }
+
+                // Schedule re-enqueue after backoff delay
+                scope.launch {
+                    kotlinx.coroutines.delay(backoffSeconds * 1000L)
+                    if (!_isUploadPaused.value) {
+                        val current = _photos.value.find { it.id == photoId }
+                        if (current != null && current.status != UploadStatus.COMPLETED) {
+                            Log.i(TAG, "Auto-requeuing delayed photo ${current.fileName} (cycle $attemptsSoFar)")
+                            if (!pendingQueue.contains(photoId)) {
+                                pendingQueue.add(photoId)
+                            }
+                        }
+                    }
                 }
             }
         } else {
+            // Upload successful: reset failure count for this photo
+            retryAttempts.remove(photoId)
             _serverConnectionState.value = ServerConnectionState.CONNECTED
             Log.i(TAG, "Successfully uploaded ${currentPhoto.fileName} (${filesToUpload.size} file(s))")
+
+            // SMART RESILIENCE: If other photos had previously failed/delayed, proof that this upload
+            // succeeded means the network connection is functional again!
+            // Automatically wake up and re-enqueue any pending photos with backoff messages.
+            scheduleAutoRetryPending()
+
             val editor = uploadedPrefs.edit()
             editor.putBoolean(photoId, true)
             filesToUpload.forEach { f ->
@@ -647,9 +899,10 @@ class UploadManager(private val context: Context) {
                 }
             }
 
-            // Trigger server curation metadata sync with debounce / delay so server clustering completes
-            scope.launch {
-                kotlinx.coroutines.delay(2500)
+            // Debounce server curation metadata sync so rapid back-to-back uploads don't spam the network
+            debounceSyncJob?.cancel()
+            debounceSyncJob = scope.launch {
+                kotlinx.coroutines.delay(4000)
                 syncUploadedFilesWithServer()
                 checkFolderGDriveSync()
             }
@@ -865,5 +1118,10 @@ class UploadManager(private val context: Context) {
         private const val PREF_PHOTOGRAPHER_NAME = "pref_photographer_name"
         private const val PREF_LIVE_VIEWER_MODE = "pref_live_viewer_mode"
         private const val PREF_SCOPES = "pref_scopes"
+        private const val PREF_NET_SIM_ENABLED = "pref_net_sim_enabled"
+        private const val PREF_NET_SIM_PROFILE = "pref_net_sim_profile"
+        private const val PREF_NET_SIM_LATENCY_MS = "pref_net_sim_latency_ms"
+        private const val PREF_NET_SIM_DROP_RATE = "pref_net_sim_drop_rate"
+        private const val PREF_NET_SIM_THROTTLE_KBPS = "pref_net_sim_throttle_kbps"
     }
 }

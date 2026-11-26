@@ -66,22 +66,26 @@ class ApiClient(
     var networkSimulation: com.fastup.model.NetworkSimulationConfig = com.fastup.model.NetworkSimulationConfig()
 
     private val client = OkHttpClient.Builder()
+        .connectionPool(okhttp3.ConnectionPool(5, 5, TimeUnit.MINUTES))
         .addInterceptor { chain ->
             val sim = networkSimulation
+            val original = chain.request()
+            val isUploadRequest = original.url.encodedPath.contains("/api/staging/upload")
+
             if (sim.enabled) {
-                // 1. Artificial latency delay
+                // 1. Artificial latency delay (apply to uploads or non-frequent calls)
                 if (sim.latencyMs > 0) {
                     try {
                         Thread.sleep(sim.latencyMs)
                     } catch (_: InterruptedException) {}
                 }
                 // 2. Initial connection drop simulation (pre-handshake packet loss)
-                if (sim.dropRatePercent > 0 && kotlin.random.Random.nextInt(100) < (sim.dropRatePercent / 2).coerceAtLeast(1)) {
+                // Only drop on uploads or lightly on other queries, avoid completely freezing health probes
+                if (isUploadRequest && sim.dropRatePercent > 0 && kotlin.random.Random.nextInt(100) < (sim.dropRatePercent / 2).coerceAtLeast(1)) {
                     throw IOException("Simulated network drop: Packet loss before connection established (${sim.dropRatePercent}% rate)")
                 }
             }
 
-            val original = chain.request()
             val baseOrigin = cleanUrl("").removeSuffix("/")
             val proto = if (baseOrigin.startsWith("https", ignoreCase = true)) "https" else "http"
             val localIp = getLocalIpAddress()
@@ -94,9 +98,9 @@ class ApiClient(
             }
             chain.proceed(requestBuilder.build())
         }
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(120, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(90, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
@@ -454,10 +458,57 @@ class ApiClient(
     }
 
     /**
+     * Light-weight ping probe to check if the target server host is reachable on the network.
+     * Hits /api/staging/ping (public endpoint), falling back to /api/staging/sessions.
+     */
+    suspend fun pingServer(targetUrl: String? = null): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val base = (targetUrl ?: baseUrl).trim().trimEnd('/')
+            val endpoint = "$base/api/staging/ping"
+            val request = Request.Builder()
+                .url(endpoint)
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                // Any HTTP response (200..499) proves the network route, IP, port and server are alive!
+                if (response.isSuccessful || response.code in 200..499) {
+                    Result.success(true)
+                } else {
+                    Result.failure(IOException("Server HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            // Fallback attempt to root/staging folder check in case /ping is not deployed yet
+            try {
+                val fallbackBase = (targetUrl ?: baseUrl).trim().trimEnd('/')
+                val fallbackReq = Request.Builder()
+                    .url("$fallbackBase/api/staging/folders")
+                    .get()
+                    .build()
+                client.newCall(fallbackReq).execute().use { fbResponse ->
+                    if (fbResponse.code in 200..499) {
+                        return@withContext Result.success(true)
+                    }
+                }
+            } catch (_: Exception) {}
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Check if the server is reachable and responding.
+     * Distinguishes between network offline and expired authentication credentials.
      */
     suspend fun checkConnection(): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
+            // 1. Probe network reachability first
+            val ping = pingServer()
+            if (ping.isFailure) {
+                return@withContext ping
+            }
+
+            // 2. Validate current apiKey credentials
             val request = Request.Builder()
                 .url(cleanUrl("api/staging/sessions"))
                 .addHeader("x-api-key", apiKey)
@@ -467,6 +518,8 @@ class ApiClient(
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     Result.success(true)
+                } else if (response.code == 401 || response.code == 403) {
+                    Result.failure(IOException("AUTH_EXPIRED: HTTP ${response.code}"))
                 } else {
                     Result.failure(IOException("Server HTTP ${response.code}"))
                 }

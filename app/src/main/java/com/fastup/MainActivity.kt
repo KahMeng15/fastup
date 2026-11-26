@@ -271,6 +271,9 @@ fun AppNavHost(
                 viewModel = viewModel,
                 onPhotoClick = { photoId ->
                     navController.navigate(Screen.Detail.createRoute(photoId))
+                },
+                onNavigateToSettings = {
+                    navController.navigate(Screen.Settings.route)
                 }
             )
         }

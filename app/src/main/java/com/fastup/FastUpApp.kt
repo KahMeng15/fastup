@@ -38,15 +38,27 @@ class FastUpApp : Application() {
                 setShowBadge(false)
             }
 
+            val alertsChannel = NotificationChannel(
+                CHANNEL_ALERTS,
+                "FastUp Alerts & Issues",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Notifies when camera disconnects, uploads fail, or server/storage issues occur"
+                setShowBadge(true)
+                enableVibration(true)
+            }
+
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager?.createNotificationChannel(usbChannel)
             notificationManager?.createNotificationChannel(uploadChannel)
+            notificationManager?.createNotificationChannel(alertsChannel)
         }
     }
 
     companion object {
         const val CHANNEL_USB_TETHER = "fastup_usb_tether"
         const val CHANNEL_UPLOAD = "fastup_upload"
+        const val CHANNEL_ALERTS = "fastup_alerts"
 
         lateinit var instance: FastUpApp
             private set

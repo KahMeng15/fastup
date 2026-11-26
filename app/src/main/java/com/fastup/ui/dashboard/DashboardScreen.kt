@@ -63,7 +63,8 @@ import com.fastup.ui.viewmodel.MainViewModel
 @Composable
 fun DashboardScreen(
     viewModel: MainViewModel,
-    onPhotoClick: (String) -> Unit = {}
+    onPhotoClick: (String) -> Unit = {},
+    onNavigateToSettings: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val stats by viewModel.dashboardStats.collectAsState()
@@ -424,7 +425,7 @@ fun DashboardScreen(
             ServerConnectionState.CONNECTED -> Pair("Online", Emerald500)
             ServerConnectionState.CONNECTING -> Pair("Connecting", Blue500)
             ServerConnectionState.DISCONNECTED -> Pair("Offline", Slate400)
-            ServerConnectionState.ERROR -> Pair("Error", Rose500)
+            ServerConnectionState.ERROR -> Pair("Session Expired", Amber500)
         }
         val serverHostDisplay = remember(viewModel.serverUrl) {
             try {
@@ -473,6 +474,40 @@ fun DashboardScreen(
             }
         }
 
+        // 1.5 Dedicated Alert & Issue Card (Appears dynamically when local or upload issues exist)
+        val activeIssues by viewModel.activeIssues.collectAsState()
+        StatusAlertCard(
+            issues = activeIssues,
+            onAction = { issue ->
+                when (issue.actionType) {
+                    com.fastup.model.IssueActionType.RECONNECT_CAMERA -> {
+                        viewModel.reconnectCamera()
+                        Toast.makeText(context, "Scanning for camera...", Toast.LENGTH_SHORT).show()
+                    }
+                    com.fastup.model.IssueActionType.RETRY_UPLOADS -> {
+                        val count = viewModel.retryAll()
+                        Toast.makeText(context, "Retrying $count upload(s)...", Toast.LENGTH_SHORT).show()
+                    }
+                    com.fastup.model.IssueActionType.TEST_CONNECTION -> {
+                        viewModel.checkServerConnection()
+                        Toast.makeText(context, "Testing server connection...", Toast.LENGTH_SHORT).show()
+                    }
+                    com.fastup.model.IssueActionType.RESUME_UPLOADS -> {
+                        viewModel.startUpload()
+                        Toast.makeText(context, "Resuming uploads...", Toast.LENGTH_SHORT).show()
+                    }
+                    com.fastup.model.IssueActionType.REPAIR_OTP,
+                    com.fastup.model.IssueActionType.CLEAR_STORAGE -> {
+                        onNavigateToSettings?.invoke() ?: run {
+                            Toast.makeText(context, "Open Settings to resolve this issue", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    null -> {}
+                }
+            },
+            modifier = Modifier.padding(horizontal = if (isLandscapeLayout) 4.dp else 12.dp)
+        )
+
         // 2. Status Cards (Local Transfer & Upload Pipeline)
         if (isLandscapeLayout) {
             TransferPipelineCard(
@@ -518,6 +553,12 @@ fun DashboardScreen(
                 detailValue = serverHostDisplay,
                 fact1 = Pair("Up", storageFacts.uploadedSizeFormatted),
                 fact2 = Pair("Free", storageFacts.serverAvailableFormatted),
+                onPendingClick = if (stats.pendingCount > 0) {
+                    {
+                        val count = viewModel.forceUploadPending()
+                        Toast.makeText(context, "Force uploading $count pending photo(s)...", Toast.LENGTH_SHORT).show()
+                    }
+                } else null,
                 onFailedClick = if (stats.failedCount > 0) { { viewModel.retryFailed() } } else null
             )
         } else {
@@ -572,6 +613,12 @@ fun DashboardScreen(
                         detailValue = serverHostDisplay,
                         fact1 = Pair("Up", storageFacts.uploadedSizeFormatted),
                         fact2 = Pair("Free", storageFacts.serverAvailableFormatted),
+                        onPendingClick = if (stats.pendingCount > 0) {
+                            {
+                                val count = viewModel.forceUploadPending()
+                                Toast.makeText(context, "Force uploading $count pending photo(s)...", Toast.LENGTH_SHORT).show()
+                            }
+                        } else null,
                         onFailedClick = if (stats.failedCount > 0) { { viewModel.retryFailed() } } else null
                     )
                 }
@@ -832,6 +879,7 @@ fun TransferPipelineCard(
     detailValue: String,            // model or host
     fact1: Pair<String, String>,    // e.g. Storage Used
     fact2: Pair<String, String>,    // e.g. Storage Free
+    onPendingClick: (() -> Unit)? = null,
     onFailedClick: (() -> Unit)? = null
 ) {
     Card(
@@ -924,7 +972,7 @@ fun TransferPipelineCard(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     CounterRow(label = counter1.first, value = counter1.second, color = Slate300)
-                    CounterRow(label = counter2.first, value = counter2.second, color = Amber500)
+                    CounterRow(label = counter2.first, value = counter2.second, color = Amber500, onClick = onPendingClick)
                     CounterRow(label = counter3.first, value = counter3.second, color = Emerald500)
                     CounterRow(
                         label = counter4.first,

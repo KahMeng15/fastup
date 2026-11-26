@@ -200,6 +200,13 @@ class UsbCameraManager(
                     }
                     Log.i(TAG, "USB device detached: ${device?.deviceName}")
                     disconnect()
+                    com.fastup.util.IssueAlertNotifier.notifyIssue(
+                        context = context,
+                        issueKey = "camera_detached",
+                        title = "Camera Disconnected",
+                        message = "Sony camera USB cable was detached. Please reconnect.",
+                        isError = true
+                    )
 
                     // Production safeguard: Auto-reconnect poll after unexpected disconnect/reboot
                     scope.launch {
@@ -414,6 +421,8 @@ class UsbCameraManager(
                 _connectionState.value = CameraConnectionState.CONNECTED
                 _cameraModel.value = device.productName ?: "Camera"
                 Log.i(TAG, "Successfully connected to camera! Ready for tethered shooting.")
+                com.fastup.util.IssueAlertNotifier.clearAlert(context, "camera_detached")
+                com.fastup.util.IssueAlertNotifier.clearAlert(context, "camera_error")
 
                 startMonitoringLoop()
             } else {
@@ -421,6 +430,13 @@ class UsbCameraManager(
                 conn.releaseInterface(ptpInterface)
                 conn.close()
                 _connectionState.value = CameraConnectionState.ERROR
+                com.fastup.util.IssueAlertNotifier.notifyIssue(
+                    context = context,
+                    issueKey = "camera_error",
+                    title = "Camera Connection Error",
+                    message = "Could not initialize Sony PTP session on ${device.productName ?: "camera"}.",
+                    isError = true
+                )
             }
         }
     }
