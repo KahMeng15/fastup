@@ -2,6 +2,7 @@ package com.fastup.upload
 
 import android.util.Log
 import com.fastup.model.*
+import com.fastup.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -196,13 +197,16 @@ class ApiClient(
 
             val call = client.newCall(request)
             activeUploadCall = call
+            AppLogger.i("Upload", "Uploading ${file.name} to session '$validSessionId' (${file.length()} bytes)")
             try {
                 call.execute().use { response ->
                     if (!response.isSuccessful) {
                         val err = response.body?.string() ?: "HTTP ${response.code}"
+                        AppLogger.e("Upload", "Upload failed for ${file.name}: HTTP ${response.code} - $err")
                         Result.failure(IOException("Upload failed (${response.code}): $err"))
                     } else {
                         val respStr = response.body?.string() ?: ""
+                        AppLogger.i("Upload", "Upload complete for ${file.name} (HTTP ${response.code})")
                         Result.success(respStr)
                     }
                 }
@@ -210,6 +214,7 @@ class ApiClient(
                 activeUploadCall = null
             }
         } catch (e: Exception) {
+            AppLogger.e("Upload", "Error uploading photo ${file.name}", e)
             Log.e("ApiClient", "Error uploading photo ${file.name}", e)
             Result.failure(e)
         }
@@ -489,10 +494,13 @@ class ApiClient(
 
             pingClient.newCall(request).execute().use { response ->
                 if (response.code in 502..504) {
+                    AppLogger.w("Network", "Ping $endpoint: Backend container down (HTTP ${response.code})")
                     Result.failure(IOException("BACKEND_DOWN: HTTP ${response.code} (Backend container is down or starting)"))
                 } else if (response.isSuccessful || response.code in 200..499) {
+                    AppLogger.d("Network", "Ping $endpoint OK (HTTP ${response.code})")
                     Result.success(true)
                 } else {
+                    AppLogger.w("Network", "Ping $endpoint HTTP ${response.code}")
                     Result.failure(IOException("Server HTTP ${response.code}"))
                 }
             }
@@ -537,16 +545,21 @@ class ApiClient(
 
             pingClient.newCall(request).execute().use { response ->
                 if (response.code in 502..504) {
+                    AppLogger.w("Network", "Server check: Backend container is down (HTTP ${response.code})")
                     Result.failure(IOException("BACKEND_DOWN: HTTP ${response.code} (Backend container is down or starting)"))
                 } else if (response.isSuccessful) {
+                    AppLogger.i("Network", "Connection verified to $baseUrl (HTTP ${response.code})")
                     Result.success(true)
                 } else if (response.code == 401 || response.code == 403) {
+                    AppLogger.w("Network", "Server check: Auth expired / invalid credentials (HTTP ${response.code})")
                     Result.failure(IOException("AUTH_EXPIRED: HTTP ${response.code}"))
                 } else {
+                    AppLogger.w("Network", "Server check returned HTTP ${response.code}")
                     Result.failure(IOException("Server HTTP ${response.code}"))
                 }
             }
         } catch (e: Exception) {
+            AppLogger.e("Network", "Connection check failed: ${e.message}", e)
             Result.failure(e)
         }
     }

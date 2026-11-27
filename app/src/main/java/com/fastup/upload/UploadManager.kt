@@ -9,6 +9,7 @@ import com.fastup.model.ServerConnectionState
 import com.fastup.model.ShareSessionInfo
 import com.fastup.model.UploadFormat
 import com.fastup.model.UploadStatus
+import com.fastup.util.AppLogger
 import com.fastup.util.ArwParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -339,15 +340,18 @@ class UploadManager(private val context: Context) {
     fun checkServerConnection(onResult: ((Boolean) -> Unit)? = null) {
         scope.launch {
             _serverConnectionState.value = ServerConnectionState.CONNECTING
+            AppLogger.d(TAG, "Checking connection to $serverUrl...")
             val res = apiClient.checkConnection()
             res.onSuccess {
                 _serverConnectionState.value = ServerConnectionState.CONNECTED
+                AppLogger.i(TAG, "Server connection established successfully to $serverUrl")
                 com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_disconnected")
                 com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_auth_expired")
                 com.fastup.util.IssueAlertNotifier.clearAlert(context, "backend_down")
                 onResult?.invoke(true)
             }.onFailure { err ->
                 val msg = err.message ?: ""
+                AppLogger.w(TAG, "Server connection check failed: $msg")
                 if (msg.contains("AUTH_EXPIRED") || msg.contains("401") || msg.contains("403")) {
                     _serverConnectionState.value = ServerConnectionState.ERROR
                     com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_disconnected")
@@ -608,6 +612,7 @@ class UploadManager(private val context: Context) {
         }
 
         Log.d(TAG, "Enqueuing ${photo.fileName} (id=$photoId) for upload")
+        AppLogger.i("UploadQueue", "Enqueuing ${photo.fileName} (${photo.fileSize} bytes)")
         _photos.update { list ->
             list.map {
                 if (it.id == photoId) it.copy(status = UploadStatus.PENDING, errorMessage = null)
@@ -817,6 +822,7 @@ class UploadManager(private val context: Context) {
     private suspend fun uploadSingle(photoId: String) {
         val photo = _photos.value.find { it.id == photoId } ?: return
         _isUploading.value = true
+        AppLogger.i(TAG, "Upload initiate: ${photo.fileName}")
 
         _photos.update { list ->
             list.map {
@@ -1000,6 +1006,7 @@ class UploadManager(private val context: Context) {
 
             if (isPermanent) {
                 Log.e(TAG, "Permanent upload failure for ${currentPhoto.fileName}: $failureReason")
+                AppLogger.e(TAG, "Permanent upload failure for ${currentPhoto.fileName}: $failureReason")
                 _photos.update { list ->
                     list.map {
                         if (it.id == photoId) it.copy(
@@ -1015,6 +1022,7 @@ class UploadManager(private val context: Context) {
                 // can continue uploading other images and automatically retry this one.
                 val backoffSeconds = minOf(300L, 5L * (1L shl minOf(attemptsSoFar - 1, 5))) // 5s, 10s, 20s, 40s, 80s, 160s, max 300s
                 Log.w(TAG, "Transient upload failure for ${currentPhoto.fileName} (cycle $attemptsSoFar). Auto-recovering in ${backoffSeconds}s: $failureReason")
+                AppLogger.w(TAG, "Upload failed (transient) for ${currentPhoto.fileName} (attempt #$attemptsSoFar). Retrying in ${backoffSeconds}s: $failureReason")
 
                 _photos.update { list ->
                     list.map {
@@ -1046,6 +1054,7 @@ class UploadManager(private val context: Context) {
             retryAttempts.remove(photoId)
             _serverConnectionState.value = ServerConnectionState.CONNECTED
             Log.i(TAG, "Successfully uploaded ${currentPhoto.fileName} (${filesToUpload.size} file(s))")
+            AppLogger.i(TAG, "Upload complete: ${currentPhoto.fileName} (${filesToUpload.size} file(s))")
 
             // SMART RESILIENCE: If other photos had previously failed/delayed, proof that this upload
             // succeeded means the network connection is functional again!

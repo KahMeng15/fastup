@@ -15,6 +15,7 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
 import com.fastup.model.CameraConnectionState
+import com.fastup.util.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -421,6 +422,7 @@ class UsbCameraManager(
                 _connectionState.value = CameraConnectionState.CONNECTED
                 _cameraModel.value = device.productName ?: "Camera"
                 Log.i(TAG, "Successfully connected to camera! Ready for tethered shooting.")
+                AppLogger.i("Camera", "Successfully connected to camera (${device.productName ?: device.deviceName})")
                 com.fastup.util.IssueAlertNotifier.clearAlert(context, "camera_detached")
                 com.fastup.util.IssueAlertNotifier.clearAlert(context, "camera_error")
 
@@ -569,6 +571,7 @@ class UsbCameraManager(
                         targetFile.delete()
                     } else {
                         Log.i(TAG, "Photo downloaded successfully: ${targetFile.absolutePath} (${targetFile.length()} bytes)")
+                        AppLogger.i("Camera", "Captured photo received from camera: ${targetFile.name} (${targetFile.length()} bytes)")
                         _deviceTransferStats.update {
                             val newCompleted = it.completedTransfer + 1
                             val total = it.totalCaptured
@@ -644,6 +647,7 @@ class UsbCameraManager(
         driver = null
         currentDevice = null
         Log.i(TAG, "Camera disconnected")
+        AppLogger.w("Camera", "Camera disconnected")
     }
 
     private fun formatSpeed(bytesPerSec: Long): String {

@@ -109,46 +109,64 @@ fun GalleryScreen(
                         .clip(RoundedCornerShape(20.dp))
                         .background(Color(0xFF1E293B))
                         .padding(2.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
+                    // Curated (Auto-Awesome / Magic Wand)
                     Surface(
                         color = if (curationMode == "curated") Amber500.copy(alpha = 0.25f) else Color.Transparent,
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.clickable { viewModel.setCurationViewMode("curated") }
                     ) {
-                        Text(
-                            text = "★ Curated",
-                            color = if (curationMode == "curated") Amber400 else Slate400,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
+                        Box(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "Curated",
+                                tint = if (curationMode == "curated") Amber400 else Slate400,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
+
+                    // All Photos (Photo Library / Collections)
                     Surface(
                         color = if (curationMode == "all") Slate700 else Color.Transparent,
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.clickable { viewModel.setCurationViewMode("all") }
                     ) {
-                        Text(
-                            text = "All (${photos.size})",
-                            color = if (curationMode == "all") Slate100 else Slate400,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
+                        Box(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PhotoLibrary,
+                                contentDescription = "All Photos (${photos.size})",
+                                tint = if (curationMode == "all") Slate100 else Slate400,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
+
+                    // Favorites (Heart / Favorite)
                     Surface(
                         color = if (curationMode == "favorites") Color(0x33EF4444) else Color.Transparent,
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.clickable { viewModel.setCurationViewMode("favorites") }
                     ) {
-                        Text(
-                            text = if (favoritesCount > 0) "❤️ $favoritesCount" else "❤️ Favs",
-                            color = if (curationMode == "favorites") Color(0xFFEF4444) else Slate400,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
+                        Box(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Favorite,
+                                contentDescription = "Favorites ($favoritesCount)",
+                                tint = if (curationMode == "favorites") Color(0xFFEF4444) else Slate400,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
             }

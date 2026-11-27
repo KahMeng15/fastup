@@ -55,6 +55,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var showClearDialog by remember { mutableStateOf(false) }
     var showPairDialog by remember { mutableStateOf(false) }
     var showFolderDialog by remember { mutableStateOf(false) }
+    var showLogsDialog by remember { mutableStateOf(false) }
     var pairOtpCode by remember { mutableStateOf("") }
     var isPairing by remember { mutableStateOf(false) }
     var pairErrorMessage by remember { mutableStateOf<String?>(null) }
@@ -1380,6 +1381,72 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
+        // Technical Logs Section
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Slate800),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Description,
+                            contentDescription = null,
+                            tint = Blue400,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "Diagnostics & Logs",
+                            color = Slate100,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Inspect real-time technical events: server connections, upload initiation, progress, completion status, camera events, and network errors.",
+                    color = Slate400,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+
+                Button(
+                    onClick = { showLogsDialog = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = Slate700),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Description,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = Slate200
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "View Logs",
+                        color = Slate200,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+
         // Confirmation Dialog for Clearing Local Storage
         if (showClearDialog && selectedFolder != null) {
             AlertDialog(
@@ -1601,6 +1668,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 },
                 containerColor = Slate800,
                 shape = RoundedCornerShape(16.dp)
+            )
+        }
+
+        // Technical Logs Modal Dialog
+        if (showLogsDialog) {
+            LogViewerDialog(
+                onDismiss = { showLogsDialog = false }
             )
         }
     }
