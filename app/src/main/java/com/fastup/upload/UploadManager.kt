@@ -703,6 +703,24 @@ class UploadManager(private val context: Context) {
         return targetPhotos.size
     }
 
+    fun retryPhotos(photosToRetry: List<PhotoItem>, includeCompleted: Boolean = false): Int {
+        if (_isUploadPaused.value) {
+            _isUploadPaused.value = false
+            prefs.edit().putBoolean(PREF_UPLOAD_PAUSED, false).apply()
+        }
+        val targets = if (includeCompleted) {
+            photosToRetry
+        } else {
+            photosToRetry.filter { it.status != UploadStatus.COMPLETED }
+        }
+        for (item in targets) {
+            retryAttempts.remove(item.id)
+            enqueue(item.id, force = true)
+        }
+        triggerNext()
+        return targets.size
+    }
+
     fun retryPhoto(id: String) {
         if (_isUploadPaused.value) {
             _isUploadPaused.value = false

@@ -93,6 +93,16 @@ data class PhotoItem(
 
     val isJpeg: Boolean
         get() = fileName.endsWith(".jpg", ignoreCase = true) || fileName.endsWith(".jpeg", ignoreCase = true) || jpegFile != null
+
+    val folderName: String
+        get() {
+            val parent = localFile.parentFile
+            return if (parent != null && parent.name != "tether_captures") {
+                parent.name
+            } else {
+                "Root"
+            }
+        }
 }
 
 data class ShareSessionInfo(

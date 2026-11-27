@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
@@ -42,7 +43,7 @@ fun GalleryScreen(
     val isUploadPaused by viewModel.isUploadPaused.collectAsState()
     val curationMode by viewModel.curationViewMode.collectAsState()
     val isSyncingCuration by viewModel.isSyncingCuration.collectAsState()
-    var showShareFolderDialog by remember { mutableStateOf(false) }
+    var shareFolderTarget by remember { mutableStateOf<String?>(null) }
 
     val pendingCount = remember(photos) { photos.count { it.status == UploadStatus.PENDING || it.status == UploadStatus.UPLOADING } }
     val failedCount = remember(photos) { photos.count { it.status == UploadStatus.FAILED } }
@@ -53,6 +54,23 @@ fun GalleryScreen(
         "favorites" -> photos.filter { it.isFavorite }
         "curated" -> photos.filter { it.isHero || it.burstGroupId == null }
         else -> photos
+    }
+
+    // Group photos by their folder name.
+    // Order folders so the most recently used / uploaded folder is at the top,
+    // and older folders follow below.
+    val currentSessionId by viewModel.currentSessionId.collectAsState()
+    val folderGroups = remember(displayedPhotos, currentSessionId) {
+        val grouped = displayedPhotos.groupBy { it.folderName }
+        grouped.entries.sortedWith(
+            compareByDescending<Map.Entry<String, List<PhotoItem>>> { entry ->
+                // Prioritize active folder first
+                if (entry.key.equals(currentSessionId, ignoreCase = true)) 1 else 0
+            }.thenByDescending { entry ->
+                // Sort by the latest photo timestamp or upload activity in that folder
+                entry.value.maxOfOrNull { it.timestamp } ?: 0L
+            }
+        )
     }
 
     androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -172,105 +190,7 @@ fun GalleryScreen(
             }
         }
 
-        // Lower Sub-header: Folder Name, Retry Upload All & Share Link Action
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 8.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF1E293B).copy(alpha = 0.6f))
-                .border(1.dp, Color(0xFF334155), RoundedCornerShape(8.dp))
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.weight(1f, fill = false)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Folder,
-                    contentDescription = null,
-                    tint = Amber400,
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = viewModel.sessionId.ifBlank { "Root" },
-                    color = Slate200,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                )
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                // Retry Upload All Button
-                FilledTonalButton(
-                    onClick = {
-                        val count = viewModel.retryAll(includeCompleted = uncompletedCount == 0)
-                        val msg = if (count > 0) {
-                            "Retrying $count uploads (including pending)..."
-                        } else {
-                            "All photos already uploaded"
-                        }
-                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
-                    },
-                    shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = when {
-                            failedCount > 0 -> Rose500.copy(alpha = 0.22f)
-                            uncompletedCount > 0 -> Amber500.copy(alpha = 0.22f)
-                            else -> Emerald500.copy(alpha = 0.22f)
-                        },
-                        contentColor = when {
-                            failedCount > 0 -> Rose400
-                            uncompletedCount > 0 -> Amber400
-                            else -> Emerald400
-                        }
-                    ),
-                    modifier = Modifier.height(26.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isUploading) Icons.Default.Sync else Icons.Default.CloudUpload,
-                        contentDescription = "Retry Upload All",
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = when {
-                            isUploading -> "Uploading..."
-                            uncompletedCount > 0 -> "Retry All ($uncompletedCount)"
-                            else -> "Retry All"
-                        },
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                FilledTonalButton(
-                    onClick = { showShareFolderDialog = true },
-                    shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = Blue600.copy(alpha = 0.25f),
-                        contentColor = Blue400
-                    ),
-                    modifier = Modifier.height(26.dp)
-                ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(12.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Share Folder", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        // Uncompleted Uploads Status Strip (visible when pending or failed items exist)
+        // Global Uncompleted Uploads Status Strip (visible when pending or failed items exist across any folder)
         if (uncompletedCount > 0) {
             Surface(
                 color = if (failedCount > 0) Rose500.copy(alpha = 0.15f) else Color(0xFF1E293B),
@@ -352,7 +272,7 @@ fun GalleryScreen(
                     )
                     Text(
                         text = when (curationMode) {
-                            "favorites" -> "No favorites in this folder"
+                            "favorites" -> "No favorites across folders"
                             "curated" -> "No curated photos"
                             else -> "No photos captured yet"
                         },
@@ -382,17 +302,152 @@ fun GalleryScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(displayedPhotos, key = { it.id }) { photo ->
-                    PhotoGridItem(
-                        photo = photo,
-                        onClick = { onPhotoClick(photo.id) },
-                        onBurstClick = {
-                            viewModel.openBurstDrawer(photo)
-                        },
-                        onFavoriteClick = {
-                            viewModel.toggleFavorite(photo)
+                folderGroups.forEach { (folderName, folderPhotos) ->
+                    val folderFailed = folderPhotos.count { it.status == UploadStatus.FAILED }
+                    val folderPending = folderPhotos.count { it.status == UploadStatus.PENDING || it.status == UploadStatus.UPLOADING }
+                    val folderUncompleted = folderFailed + folderPending
+                    val isCurrentActive = folderName.equals(currentSessionId, ignoreCase = true)
+
+                    // Folder Header Strip (Spans full width)
+                    item(span = { GridItemSpan(columnsCount) }, key = "header_$folderName") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp, bottom = 6.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (isCurrentActive) Color(0xFF1E293B) else Color(0xFF1E293B).copy(alpha = 0.6f)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isCurrentActive) Amber500.copy(alpha = 0.4f) else Color(0xFF334155),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.weight(1f, fill = false)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Folder,
+                                    contentDescription = null,
+                                    tint = if (isCurrentActive) Amber400 else Slate400,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = folderName,
+                                    color = if (isCurrentActive) Amber400 else Slate200,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                )
+                                if (isCurrentActive) {
+                                    Surface(
+                                        color = Amber500.copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(10.dp)
+                                    ) {
+                                        Text(
+                                            text = "Active",
+                                            color = Amber400,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "(${folderPhotos.size})",
+                                    color = Slate400,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                // Retry uploads for this folder
+                                FilledTonalButton(
+                                    onClick = {
+                                        val count = viewModel.retryPhotos(folderPhotos, includeCompleted = folderUncompleted == 0)
+                                        val msg = if (count > 0) {
+                                            "Retrying $count upload(s) in '$folderName'..."
+                                        } else {
+                                            "All photos in '$folderName' already uploaded"
+                                        }
+                                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                    },
+                                    shape = RoundedCornerShape(6.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = when {
+                                            folderFailed > 0 -> Rose500.copy(alpha = 0.22f)
+                                            folderUncompleted > 0 -> Amber500.copy(alpha = 0.22f)
+                                            else -> Emerald500.copy(alpha = 0.22f)
+                                        },
+                                        contentColor = when {
+                                            folderFailed > 0 -> Rose400
+                                            folderUncompleted > 0 -> Amber400
+                                            else -> Emerald400
+                                        }
+                                    ),
+                                    modifier = Modifier.height(26.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isUploading && folderUncompleted > 0) Icons.Default.Sync else Icons.Default.CloudUpload,
+                                        contentDescription = "Retry Upload",
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = when {
+                                            isUploading && folderUncompleted > 0 -> "Uploading..."
+                                            folderUncompleted > 0 -> "Retry ($folderUncompleted)"
+                                            else -> "Retry"
+                                        },
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                // Share Folder link button
+                                FilledTonalButton(
+                                    onClick = { shareFolderTarget = folderName },
+                                    shape = RoundedCornerShape(6.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = Blue600.copy(alpha = 0.25f),
+                                        contentColor = Blue400
+                                    ),
+                                    modifier = Modifier.height(26.dp)
+                                ) {
+                                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(12.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Share", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
-                    )
+                    }
+
+                    // Photos in this folder
+                    items(folderPhotos, key = { it.id }) { photo ->
+                        PhotoGridItem(
+                            photo = photo,
+                            onClick = { onPhotoClick(photo.id) },
+                            onBurstClick = {
+                                viewModel.openBurstDrawer(photo)
+                            },
+                            onFavoriteClick = {
+                                viewModel.toggleFavorite(photo)
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -406,12 +461,12 @@ fun GalleryScreen(
         }
     )
 
-    if (showShareFolderDialog) {
+    if (shareFolderTarget != null) {
         com.fastup.ui.share.ShareModalDialog(
-            title = "Folder: ${viewModel.sessionId}",
+            title = "Folder: $shareFolderTarget",
             targetPhoto = null,
             viewModel = viewModel,
-            onDismiss = { showShareFolderDialog = false }
+            onDismiss = { shareFolderTarget = null }
         )
     }
 }

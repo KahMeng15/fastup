@@ -547,6 +547,10 @@ class MainViewModel : ViewModel() {
         return uploadManager.retryAll(includeCompleted)
     }
 
+    fun retryPhotos(photos: List<com.fastup.model.PhotoItem>, includeCompleted: Boolean = false): Int {
+        return uploadManager.retryPhotos(photos, includeCompleted)
+    }
+
     fun retryPhoto(id: String) {
         uploadManager.retryPhoto(id)
     }
