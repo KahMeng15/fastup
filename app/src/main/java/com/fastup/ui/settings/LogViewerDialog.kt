@@ -248,38 +248,50 @@ fun LogViewerDialog(
                                         LogLevel.ERROR -> Rose400
                                     }
 
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        verticalAlignment = Alignment.Top
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 3.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
                                     ) {
-                                        Text(
-                                            text = item.formattedTime,
-                                            color = Slate500,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Normal
-                                        )
-                                        Text(
-                                            text = item.level.name.take(4).padEnd(4),
-                                            color = levelColor,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = "[${item.tag}]",
-                                            color = Slate400,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Medium
-                                        )
+                                        // Line 1: Timestamp, Level, Category/Tag
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = item.formattedTime,
+                                                color = Slate500,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Normal
+                                            )
+                                            Text(
+                                                text = item.level.name.take(4).padEnd(4),
+                                                color = levelColor,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = "[${item.tag}]",
+                                                color = Slate400,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
+
+                                        // Line 2: Message
                                         Text(
                                             text = item.message,
                                             color = Slate200,
                                             fontFamily = FontFamily.Monospace,
                                             fontSize = 11.sp,
-                                            modifier = Modifier.weight(1f)
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(start = 2.dp)
                                         )
                                     }
                                 }
