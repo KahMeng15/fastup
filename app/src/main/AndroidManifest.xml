@@ -49,7 +49,7 @@
             android:name=".service.UsbTetherService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="connectedDevice|dataSync" />
 
         <receiver
             android:name=".receiver.CaptureReceiver"

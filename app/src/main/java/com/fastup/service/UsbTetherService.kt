@@ -54,26 +54,23 @@ class UsbTetherService : Service() {
 
         // 1. Immediately enter foreground to satisfy Android 8+ foreground service rules
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            }
             ServiceCompat.startForeground(
                 this,
                 NOTIFICATION_ID,
                 buildNotification("Camera: Ready"),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                serviceType
             )
         } else {
             startForeground(NOTIFICATION_ID, buildNotification("Camera: Ready"))
         }
 
         // Acquire partial wake lock to keep USB PTP transfer and polling alive when screen turns off
-        try {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
-            wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FastUp:UsbTetherWakeLock")?.apply {
-                setReferenceCounted(false)
-                acquire(12 * 60 * 60 * 1000L) // 12 hours timeout safety
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to acquire WakeLock: ${e.message}")
-        }
+        acquireWakeLockIfNeeded()
 
         // 2. Initialize camera manager and scan for connected camera
         usbCameraManager = UsbCameraManager(this) { capturedFile ->
@@ -86,14 +83,71 @@ class UsbTetherService : Service() {
     private fun observeCameraState() {
         usbCameraManager.connectionState.onEach { state ->
             val text = when (state) {
-                CameraConnectionState.CONNECTED -> "Camera Connected (Ready to shoot)"
-                CameraConnectionState.CONNECTING -> "Connecting to camera..."
-                CameraConnectionState.CAPTURING -> "Receiving photo from camera..."
-                CameraConnectionState.DISCONNECTED -> "No camera connected (Waiting for USB)"
-                CameraConnectionState.ERROR -> "USB Connection Error"
+                CameraConnectionState.CONNECTED -> {
+                    acquireWakeLockIfNeeded()
+                    "Camera Connected (Ready to shoot)"
+                }
+                CameraConnectionState.CONNECTING -> {
+                    acquireWakeLockIfNeeded()
+                    "Connecting to camera..."
+                }
+                CameraConnectionState.CAPTURING -> {
+                    acquireWakeLockIfNeeded()
+                    "Receiving photo from camera..."
+                }
+                CameraConnectionState.DISCONNECTED -> {
+                    // Only release wake lock if no uploads are active
+                    if (!FastUpApp.instance.uploadManager.isUploading.value) {
+                        releaseWakeLock()
+                    }
+                    "No camera connected (Waiting for USB)"
+                }
+                CameraConnectionState.ERROR -> {
+                    if (!FastUpApp.instance.uploadManager.isUploading.value) {
+                        releaseWakeLock()
+                    }
+                    "USB Connection Error"
+                }
             }
             updateNotification(text)
         }.launchIn(scope)
+
+        // Also track upload manager activity to keep CPU awake during long event uploads
+        FastUpApp.instance.uploadManager.isUploading.onEach { uploading ->
+            if (uploading) {
+                acquireWakeLockIfNeeded()
+            } else if (usbCameraManager.connectionState.value == CameraConnectionState.DISCONNECTED) {
+                releaseWakeLock()
+            }
+        }.launchIn(scope)
+    }
+
+    private fun acquireWakeLockIfNeeded() {
+        try {
+            if (wakeLock == null) {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FastUp:UsbTetherWakeLock")?.apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (wakeLock?.isHeld == false) {
+                wakeLock?.acquire(6 * 60 * 60 * 1000L) // 6 hours safety timeout
+                Log.d(TAG, "Acquired partial WakeLock")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to acquire WakeLock: ${e.message}")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d(TAG, "Released partial WakeLock")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error releasing WakeLock: ${e.message}")
+        }
     }
 
     private fun processCapturedFile(file: File) {

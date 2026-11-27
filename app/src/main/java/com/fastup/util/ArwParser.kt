@@ -55,56 +55,66 @@ object ArwParser {
     }
 
     private fun scanLargestEmbeddedJpeg(arwFile: File, outputFile: File): Boolean {
-        // Sony ARW stores the 1616x1080 preview within the first 4-8MB
-        val maxScan = minOf(arwFile.length(), 8L * 1024 * 1024).toInt()
-        val buffer = ByteArray(maxScan)
+        // Sony ARW stores the 1616x1080 preview within the first 8MB.
+        // Instead of allocating a monolithic 8MB ByteArray on the heap (which causes GC spikes during bursts),
+        // we map the file region into memory via FileChannel or use buffered streams.
+        val fileLength = arwFile.length()
+        val maxScan = minOf(fileLength, 8L * 1024 * 1024)
+        if (maxScan < 100) return false
 
-        RandomAccessFile(arwFile, "r").use { raf ->
-            raf.readFully(buffer)
-        }
+        try {
+            RandomAccessFile(arwFile, "r").use { raf ->
+                val channel = raf.channel
+                val buffer = channel.map(java.nio.channels.FileChannel.MapMode.READ_ONLY, 0, maxScan)
 
-        var bestStart = -1
-        var bestLength = 0
-        var i = 0
+                var bestStart = -1
+                var bestLength = 0
+                val limit = buffer.limit()
+                var i = 0
 
-        while (i < maxScan - 4) {
-            // Check for JPEG SOI (FF D8 FF)
-            if ((buffer[i].toInt() and 0xFF) == 0xFF &&
-                (buffer[i + 1].toInt() and 0xFF) == 0xD8 &&
-                (buffer[i + 2].toInt() and 0xFF) == 0xFF
-            ) {
-                // Find matching JPEG EOI (FF D9)
-                var eoi = -1
-                var j = i + 2
-                while (j < maxScan - 1) {
-                    if ((buffer[j].toInt() and 0xFF) == 0xFF &&
-                        (buffer[j + 1].toInt() and 0xFF) == 0xD9
+                while (i < limit - 4) {
+                    // Check for JPEG SOI (FF D8 FF)
+                    if ((buffer.get(i).toInt() and 0xFF) == 0xFF &&
+                        (buffer.get(i + 1).toInt() and 0xFF) == 0xD8 &&
+                        (buffer.get(i + 2).toInt() and 0xFF) == 0xFF
                     ) {
-                        eoi = j + 2
-                        break
+                        // Find matching JPEG EOI (FF D9)
+                        var eoi = -1
+                        var j = i + 2
+                        while (j < limit - 1) {
+                            if ((buffer.get(j).toInt() and 0xFF) == 0xFF &&
+                                (buffer.get(j + 1).toInt() and 0xFF) == 0xD9
+                            ) {
+                                eoi = j + 2
+                                break
+                            }
+                            j++
+                        }
+
+                        if (eoi != -1) {
+                            val length = eoi - i
+                            if (length > bestLength) {
+                                bestLength = length
+                                bestStart = i
+                            }
+                            i = eoi
+                            continue
+                        }
                     }
-                    j++
+                    i++
                 }
 
-                if (eoi != -1) {
-                    val length = eoi - i
-                    if (length > bestLength) {
-                        bestLength = length
-                        bestStart = i
+                if (bestStart != -1 && bestLength > 20 * 1024) {
+                    val outChannel = FileOutputStream(outputFile).channel
+                    outChannel.use { oc ->
+                        channel.transferTo(bestStart.toLong(), bestLength.toLong(), oc)
                     }
-                    i = eoi
-                    continue
+                    Log.i(TAG, "Extracted high-res embedded JPEG via zero-copy channel: $bestLength bytes (at offset $bestStart)")
+                    return true
                 }
             }
-            i++
-        }
-
-        if (bestStart != -1 && bestLength > 20 * 1024) {
-            FileOutputStream(outputFile).use { fos ->
-                fos.write(buffer, bestStart, bestLength)
-            }
-            Log.i(TAG, "Extracted high-res embedded JPEG directly: $bestLength bytes (at offset $bestStart)")
-            return true
+        } catch (e: Exception) {
+            Log.w(TAG, "Zero-copy embedded JPEG scan failed: ${e.message}, falling back to buffered stream")
         }
 
         return false

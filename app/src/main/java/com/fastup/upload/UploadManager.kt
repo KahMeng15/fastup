@@ -245,9 +245,15 @@ class UploadManager(private val context: Context) {
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
             while (true) {
-                // If disconnected or in error, probe slightly more frequently (5s) to detect recovery quickly;
-                // otherwise probe every 8s.
-                val delayMs = if (_serverConnectionState.value == ServerConnectionState.CONNECTED) 8000L else 5000L
+                // If uploading is actively succeeding, skip artificial heartbeat pings to save mobile data & radio power.
+                if (_isUploading.value && _serverConnectionState.value == ServerConnectionState.CONNECTED) {
+                    kotlinx.coroutines.delay(15000L)
+                    continue
+                }
+
+                // If disconnected or in error, probe at 5s intervals to detect recovery quickly;
+                // when idle and connected, probe at 15s to conserve cellular battery and avoid thermal throttling.
+                val delayMs = if (_serverConnectionState.value == ServerConnectionState.CONNECTED) 15000L else 5000L
                 kotlinx.coroutines.delay(delayMs)
 
                 if (!canUploadNow()) {
@@ -868,8 +874,9 @@ class UploadManager(private val context: Context) {
             UploadFormat.JPEG_ONLY -> listOfNotNull(currentPhoto.jpegFile ?: currentPhoto.previewFile ?: currentPhoto.displayFile)
             UploadFormat.RAW_AND_JPEG -> {
                 val list = mutableListOf<File>()
-                currentPhoto.rawFile?.let { list.add(it) }
+                // Prioritize lightweight JPEG/Preview first so client sees live photos immediately
                 currentPhoto.jpegFile?.let { list.add(it) }
+                currentPhoto.rawFile?.let { list.add(it) }
                 if (list.isEmpty()) list.add(currentPhoto.localFile)
                 list
             }
