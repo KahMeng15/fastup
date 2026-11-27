@@ -1,14 +1,19 @@
 package com.fastup
 
 import android.app.Application
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import com.fastup.upload.UploadManager
+import com.fastup.util.UploadNotificationManager
 
 class FastUpApp : Application() {
 
     lateinit var uploadManager: UploadManager
+        private set
+
+    lateinit var uploadNotificationManager: UploadNotificationManager
         private set
 
     override fun onCreate() {
@@ -16,6 +21,8 @@ class FastUpApp : Application() {
         instance = this
         createNotificationChannels()
         uploadManager = UploadManager(this)
+        uploadNotificationManager = UploadNotificationManager(this)
+        uploadNotificationManager.start()
     }
 
     private fun createNotificationChannels() {
@@ -31,11 +38,14 @@ class FastUpApp : Application() {
 
             val uploadChannel = NotificationChannel(
                 CHANNEL_UPLOAD,
-                "FastUp Uploads",
-                NotificationManager.IMPORTANCE_LOW
+                "FastUp Uploads & Live Status",
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description = "Shows upload progress and transfer speed"
-                setShowBadge(false)
+                description = "Shows live upload progress, camera tethering status and transfer speed on lockscreen"
+                setShowBadge(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setSound(null, null) // Silent so continuous progress updates don't make alert sounds
+                enableVibration(false)
             }
 
             val alertsChannel = NotificationChannel(
@@ -57,7 +67,7 @@ class FastUpApp : Application() {
 
     companion object {
         const val CHANNEL_USB_TETHER = "fastup_usb_tether"
-        const val CHANNEL_UPLOAD = "fastup_upload"
+        const val CHANNEL_UPLOAD = "fastup_live_activity"
         const val CHANNEL_ALERTS = "fastup_alerts"
 
         lateinit var instance: FastUpApp
