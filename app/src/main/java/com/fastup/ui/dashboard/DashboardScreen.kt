@@ -969,7 +969,7 @@ fun TransferPipelineCard(
             ) {
                 // Col 1: Counters (All 4 in ONE single vertical column)
                 Column(
-                    modifier = Modifier.weight(0.85f),
+                    modifier = Modifier.weight(0.95f),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     CounterRow(label = counter1.first, value = counter1.second, color = Slate300)
@@ -993,7 +993,7 @@ fun TransferPipelineCard(
 
                 // Col 2: Status, Details & Storage Facts (4 rows matching Col 1)
                 Column(
-                    modifier = Modifier.weight(1.15f),
+                    modifier = Modifier.weight(1.05f),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     StatusDataRow(
@@ -1034,8 +1034,8 @@ fun StatusDataRow(
         Text(
             text = label,
             color = Slate400,
-            fontSize = 9.sp,
-            lineHeight = 12.sp,
+            fontSize = 8.5.sp,
+            lineHeight = 11.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -1052,8 +1052,8 @@ fun StatusDataRow(
                 text = statusText,
                 color = dotColor,
                 fontWeight = FontWeight.Bold,
-                fontSize = 9.sp,
-                lineHeight = 12.sp,
+                fontSize = 8.5.sp,
+                lineHeight = 11.sp,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -1085,8 +1085,8 @@ fun CounterRow(
         Text(
             text = label,
             color = Slate400,
-            fontSize = 9.sp,
-            lineHeight = 12.sp,
+            fontSize = 8.5.sp,
+            lineHeight = 11.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -1094,9 +1094,11 @@ fun CounterRow(
             text = value,
             color = color,
             fontWeight = FontWeight.Bold,
-            fontSize = 9.5.sp,
-            lineHeight = 12.sp,
-            fontFamily = FontFamily.Monospace
+            fontSize = 8.5.sp,
+            lineHeight = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            softWrap = false
         )
     }
 }
@@ -1111,8 +1113,8 @@ fun FactDataRow(label: String, value: String) {
         Text(
             text = label,
             color = Slate400,
-            fontSize = 9.sp,
-            lineHeight = 12.sp,
+            fontSize = 8.5.sp,
+            lineHeight = 11.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -1120,8 +1122,8 @@ fun FactDataRow(label: String, value: String) {
             text = value,
             color = Slate100,
             fontWeight = FontWeight.SemiBold,
-            fontSize = 9.sp,
-            lineHeight = 12.sp,
+            fontSize = 8.5.sp,
+            lineHeight = 11.sp,
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
