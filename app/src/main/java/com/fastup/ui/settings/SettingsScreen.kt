@@ -154,6 +154,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         val (statusText, statusBg, statusColor) = when (serverState) {
                             ServerConnectionState.CONNECTED -> Triple("Online", Emerald500.copy(alpha = 0.18f), Emerald500)
                             ServerConnectionState.CONNECTING -> Triple("Connecting", Blue500.copy(alpha = 0.18f), Blue500)
+                            ServerConnectionState.BACKEND_DOWN -> Triple("Backend Down", Rose500.copy(alpha = 0.18f), Rose500)
                             ServerConnectionState.ERROR -> Triple("Session Expired", Amber500.copy(alpha = 0.18f), Amber500)
                             else -> Triple("Offline", Slate600.copy(alpha = 0.35f), Slate400)
                         }

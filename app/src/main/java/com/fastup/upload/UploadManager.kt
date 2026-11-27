@@ -38,6 +38,7 @@ class UploadManager(private val context: Context) {
 
     private val prefs = context.getSharedPreferences("fastup_settings", Context.MODE_PRIVATE)
     private val uploadedPrefs = context.getSharedPreferences("fastup_uploaded_photos", Context.MODE_PRIVATE)
+    private val favoritePrefs = context.getSharedPreferences("fastup_favorite_photos", Context.MODE_PRIVATE)
 
     // Preferences & Settings State
     var serverUrl: String = prefs.getString(PREF_SERVER_URL, "http://10.0.0.43:8000") ?: "http://10.0.0.43:8000"
@@ -208,6 +209,7 @@ class UploadManager(private val context: Context) {
     private val pendingQueue = ConcurrentLinkedQueue<String>() // photo IDs
     private val retryAttempts = java.util.concurrent.ConcurrentHashMap<String, Int>()
     private var autoRetryJob: Job? = null
+    private var heartbeatJob: Job? = null
 
     init {
         apiClient.networkSimulation = _networkSimulation.value
@@ -216,6 +218,7 @@ class UploadManager(private val context: Context) {
         syncUploadedFilesWithServer()
         checkFolderGDriveSync()
         checkServerConnection()
+        startHeartbeat()
         startWorker()
     }
 
@@ -226,6 +229,105 @@ class UploadManager(private val context: Context) {
             _folderGDriveSync.value = info
             withContext(Dispatchers.Main) {
                 onResult?.invoke(info)
+            }
+        }
+    }
+
+    /**
+     * Periodic background heartbeat probe.
+     * Continuously checks server health via lightweight pingClient every 6-8 seconds.
+     * If containers go down, detects it instantly (within 3 seconds), cancels hanging uploads,
+     * updates UI to DISCONNECTED and notifies issue alert.
+     * When server/containers come back up, automatically marks CONNECTED and triggers pending queue.
+     */
+    private fun startHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = scope.launch {
+            while (true) {
+                // If disconnected or in error, probe slightly more frequently (5s) to detect recovery quickly;
+                // otherwise probe every 8s.
+                val delayMs = if (_serverConnectionState.value == ServerConnectionState.CONNECTED) 8000L else 5000L
+                kotlinx.coroutines.delay(delayMs)
+
+                if (!canUploadNow()) {
+                    if (_serverConnectionState.value != ServerConnectionState.DISCONNECTED) {
+                        _serverConnectionState.value = ServerConnectionState.DISCONNECTED
+                    }
+                    continue
+                }
+
+                val pingRes = apiClient.pingServer()
+                if (pingRes.isSuccess) {
+                    if (_serverConnectionState.value == ServerConnectionState.DISCONNECTED || _serverConnectionState.value == ServerConnectionState.BACKEND_DOWN) {
+                        Log.i(TAG, "Heartbeat: Server is back ONLINE! Restoring connection state.")
+                        _serverConnectionState.value = ServerConnectionState.CONNECTED
+                        com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_disconnected")
+                        com.fastup.util.IssueAlertNotifier.clearAlert(context, "backend_down")
+                        // Trigger queue to resume any paused uploads
+                        triggerNext()
+                    }
+                } else {
+                    val err = pingRes.exceptionOrNull()
+                    val errMsg = err?.message ?: ""
+                    Log.w(TAG, "Heartbeat probe failed: $errMsg")
+
+                    val isBackendDown = errMsg.contains("BACKEND_DOWN") || errMsg.contains("502") || errMsg.contains("503") || errMsg.contains("504")
+
+                    if (isBackendDown) {
+                        if (_serverConnectionState.value != ServerConnectionState.BACKEND_DOWN) {
+                            _serverConnectionState.value = ServerConnectionState.BACKEND_DOWN
+                            com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_disconnected")
+                            com.fastup.util.IssueAlertNotifier.notifyIssue(
+                                context = context,
+                                issueKey = "backend_down",
+                                title = "Backend Container Down",
+                                message = "Frontend is online, but backend container is stopped (HTTP 502).",
+                                isError = true
+                            )
+                            // Cancel any stuck in-flight upload call immediately
+                            apiClient.cancelCurrentUpload()
+                            _photos.update { list ->
+                                list.map {
+                                    if (it.status == UploadStatus.UPLOADING) {
+                                        it.copy(
+                                            status = UploadStatus.PENDING,
+                                            uploadSpeedBps = 0L,
+                                            errorMessage = "Backend container down (waiting for restart)"
+                                        )
+                                    } else it
+                                }
+                            }
+                            _isUploading.value = false
+                            _currentSpeedBps.value = 0L
+                        }
+                    } else if (_serverConnectionState.value != ServerConnectionState.DISCONNECTED) {
+                        _serverConnectionState.value = ServerConnectionState.DISCONNECTED
+                        com.fastup.util.IssueAlertNotifier.clearAlert(context, "backend_down")
+                        com.fastup.util.IssueAlertNotifier.notifyIssue(
+                            context = context,
+                            issueKey = "server_disconnected",
+                            title = "FastUp Server Offline",
+                            message = "Cannot reach server at $serverUrl. Check Wi-Fi & IP.",
+                            isError = true
+                        )
+                        // Cancel any stuck in-flight upload call immediately
+                        apiClient.cancelCurrentUpload()
+                        // Reset any photo in UPLOADING state back to PENDING
+                        _photos.update { list ->
+                            list.map {
+                                if (it.status == UploadStatus.UPLOADING) {
+                                    it.copy(
+                                        status = UploadStatus.PENDING,
+                                        uploadSpeedBps = 0L,
+                                        errorMessage = "Server offline (will retry when online)"
+                                    )
+                                } else it
+                            }
+                        }
+                        _isUploading.value = false
+                        _currentSpeedBps.value = 0L
+                    }
+                }
             }
         }
     }
@@ -242,11 +344,14 @@ class UploadManager(private val context: Context) {
                 _serverConnectionState.value = ServerConnectionState.CONNECTED
                 com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_disconnected")
                 com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_auth_expired")
+                com.fastup.util.IssueAlertNotifier.clearAlert(context, "backend_down")
                 onResult?.invoke(true)
             }.onFailure { err ->
                 val msg = err.message ?: ""
                 if (msg.contains("AUTH_EXPIRED") || msg.contains("401") || msg.contains("403")) {
                     _serverConnectionState.value = ServerConnectionState.ERROR
+                    com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_disconnected")
+                    com.fastup.util.IssueAlertNotifier.clearAlert(context, "backend_down")
                     com.fastup.util.IssueAlertNotifier.notifyIssue(
                         context = context,
                         issueKey = "server_auth_expired",
@@ -254,8 +359,21 @@ class UploadManager(private val context: Context) {
                         message = "Photographer token expired (HTTP 401). Tap to re-pair via OTP.",
                         isError = true
                     )
+                } else if (msg.contains("BACKEND_DOWN") || msg.contains("502") || msg.contains("503") || msg.contains("504")) {
+                    _serverConnectionState.value = ServerConnectionState.BACKEND_DOWN
+                    com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_disconnected")
+                    com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_auth_expired")
+                    com.fastup.util.IssueAlertNotifier.notifyIssue(
+                        context = context,
+                        issueKey = "backend_down",
+                        title = "Backend Container Down",
+                        message = "Frontend reachable, but backend is stopped (HTTP 502).",
+                        isError = true
+                    )
                 } else {
                     _serverConnectionState.value = ServerConnectionState.DISCONNECTED
+                    com.fastup.util.IssueAlertNotifier.clearAlert(context, "backend_down")
+                    com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_auth_expired")
                     com.fastup.util.IssueAlertNotifier.notifyIssue(
                         context = context,
                         issueKey = "server_disconnected",
@@ -323,6 +441,26 @@ class UploadManager(private val context: Context) {
                                 photo.status
                             }
 
+                            val isFavServer = serverCuration?.isFavorite ?: false
+                            val isFavLocal = favoritePrefs.getBoolean(photo.id, false) ||
+                                (photo.rawFile != null && favoritePrefs.getBoolean(photo.rawFile.name, false)) ||
+                                (photo.jpegFile != null && favoritePrefs.getBoolean(photo.jpegFile.name, false)) ||
+                                favoritePrefs.getBoolean(photo.fileName, false) ||
+                                favoritePrefs.getBoolean(baseName, false)
+
+                            val finalFavorite = isFavServer || isFavLocal
+                            if (isFavServer && !isFavLocal) {
+                                favoritePrefs.edit()
+                                    .putBoolean(photo.id, true)
+                                    .putBoolean(photo.fileName, true)
+                                    .putBoolean(baseName, true)
+                                    .apply()
+                            } else if (isFavLocal && !isFavServer && newServerMediaId != null) {
+                                scope.launch {
+                                    apiClient.toggleFavorite(newServerMediaId, true)
+                                }
+                            }
+
                             photo.copy(
                                 status = newStatus,
                                 uploadProgress = if (newStatus == UploadStatus.COMPLETED) 1f else photo.uploadProgress,
@@ -331,7 +469,8 @@ class UploadManager(private val context: Context) {
                                 isHero = newIsHero,
                                 burstCount = newBurstCount,
                                 qualityScore = newQualityScore,
-                                serverMediaId = newServerMediaId
+                                serverMediaId = newServerMediaId,
+                                isFavorite = finalFavorite
                             )
                         }
                     }
@@ -379,6 +518,8 @@ class UploadManager(private val context: Context) {
 
                 val isUploaded = uploadedPrefs.getBoolean(base, false) ||
                         groupFiles.any { uploadedPrefs.getBoolean(it.name, false) }
+                val isFav = favoritePrefs.getBoolean(base, false) ||
+                        groupFiles.any { favoritePrefs.getBoolean(it.name, false) }
 
                 PhotoItem(
                     id = base,
@@ -391,7 +532,8 @@ class UploadManager(private val context: Context) {
                     timestamp = primaryFile.lastModified(),
                     status = if (isUploaded) UploadStatus.COMPLETED else UploadStatus.PENDING,
                     uploadProgress = if (isUploaded) 1f else 0f,
-                    errorMessage = null
+                    errorMessage = null,
+                    isFavorite = isFav
                 )
             }
             if (newItems.isNotEmpty()) {
@@ -426,12 +568,16 @@ class UploadManager(private val context: Context) {
                     jpegFile = jpeg,
                     previewFile = preview,
                     fileSize = totalSize,
-                    exif = if (existing.exif.shutterSpeed != null) existing.exif else photo.exif
+                    exif = if (existing.exif.shutterSpeed != null) existing.exif else photo.exif,
+                    isFavorite = existing.isFavorite || photo.isFavorite || favoritePrefs.getBoolean(baseName, false)
                 )
                 itemToEnqueue = merged
                 listOf(merged) + current.filter { it.id != existing.id && it.id != baseName }
             } else {
-                listOf(photo) + current.filter { it.id != baseName }
+                val isFav = photo.isFavorite || favoritePrefs.getBoolean(baseName, false) || favoritePrefs.getBoolean(photo.fileName, false)
+                val newPhoto = photo.copy(isFavorite = isFav)
+                itemToEnqueue = newPhoto
+                listOf(newPhoto) + current.filter { it.id != baseName }
             }
         }
         refreshLocalFolders()
@@ -606,6 +752,29 @@ class UploadManager(private val context: Context) {
                     continue
                 }
 
+                if (_serverConnectionState.value == ServerConnectionState.DISCONNECTED || _serverConnectionState.value == ServerConnectionState.BACKEND_DOWN) {
+                    // Check if server is still offline before starting upload to prevent freezing UI in UPLOADING state
+                    val probe = apiClient.pingServer()
+                    if (probe.isFailure) {
+                        val errMsg = probe.exceptionOrNull()?.message ?: ""
+                        if (errMsg.contains("BACKEND_DOWN") || errMsg.contains("502") || errMsg.contains("503") || errMsg.contains("504")) {
+                            _serverConnectionState.value = ServerConnectionState.BACKEND_DOWN
+                        } else {
+                            _serverConnectionState.value = ServerConnectionState.DISCONNECTED
+                        }
+                        Log.w(TAG, "Worker: Server/Backend is down, delaying upload for photo $nextId")
+                        pendingQueue.add(nextId)
+                        _isUploading.value = false
+                        _currentSpeedBps.value = 0L
+                        kotlinx.coroutines.delay(3000)
+                        continue
+                    } else {
+                        _serverConnectionState.value = ServerConnectionState.CONNECTED
+                        com.fastup.util.IssueAlertNotifier.clearAlert(context, "server_disconnected")
+                        com.fastup.util.IssueAlertNotifier.clearAlert(context, "backend_down")
+                    }
+                }
+
                 uploadSingle(nextId)
             }
         }
@@ -719,34 +888,37 @@ class UploadManager(private val context: Context) {
                 var lastTime = System.currentTimeMillis()
                 var lastBytes = 0L
 
+                val isFav = currentPhoto.isFavorite || favoritePrefs.getBoolean(photoId, false)
                 val result = apiClient.uploadPhoto(
                     file = fileToUpload,
-                    sessionId = targetSession
-                ) { bytesWritten, _ ->
-                    val now = System.currentTimeMillis()
-                    val dt = (now - lastTime).coerceAtLeast(1)
-                    val dBytes = bytesWritten - lastBytes
+                    sessionId = targetSession,
+                    onProgress = { bytesWritten, _ ->
+                        val now = System.currentTimeMillis()
+                        val dt = (now - lastTime).coerceAtLeast(1)
+                        val dBytes = bytesWritten - lastBytes
 
-                    if (dt >= 400 || (totalUploadedBytes + bytesWritten) >= totalBatchBytes) {
-                        val speedBps = (dBytes * 1000) / dt
-                        lastTime = now
-                        lastBytes = bytesWritten
+                        if (dt >= 400 || (totalUploadedBytes + bytesWritten) >= totalBatchBytes) {
+                            val speedBps = (dBytes * 1000) / dt
+                            lastTime = now
+                            lastBytes = bytesWritten
 
-                        _currentSpeedBps.value = speedBps
-                        val overallProgress = ((totalUploadedBytes + bytesWritten).toFloat() / totalBatchBytes).coerceIn(0f, 1f)
+                            _currentSpeedBps.value = speedBps
+                            val overallProgress = ((totalUploadedBytes + bytesWritten).toFloat() / totalBatchBytes).coerceIn(0f, 1f)
 
-                        _photos.update { list ->
-                            list.map {
-                                if (it.id == photoId) it.copy(
-                                    uploadProgress = overallProgress,
-                                    uploadSpeedBps = speedBps,
-                                    errorMessage = if (fileAttempt > 1) "Retrying ($fileAttempt/$maxAttemptsPerFile)..." else null
-                                )
-                                else it
+                            _photos.update { list ->
+                                list.map {
+                                    if (it.id == photoId) it.copy(
+                                        uploadProgress = overallProgress,
+                                        uploadSpeedBps = speedBps,
+                                        errorMessage = if (fileAttempt > 1) "Retrying ($fileAttempt/$maxAttemptsPerFile)..." else null
+                                    )
+                                    else it
+                                }
                             }
                         }
-                    }
-                }
+                    },
+                    isFavorite = isFav
+                )
 
                 if (result.isSuccess) {
                     fileSuccess = true
@@ -765,6 +937,19 @@ class UploadManager(private val context: Context) {
 
                     if (isPermanent) {
                         Log.e(TAG, "Permanent upload failure, aborting retries: $fileError")
+                        break
+                    }
+
+                    // Check if network / host unreachable (e.g. containers stopped or connection refused / timed out)
+                    val isConnectionDown = fileError.contains("Failed to connect", ignoreCase = true) ||
+                            fileError.contains("Connection refused", ignoreCase = true) ||
+                            fileError.contains("SocketTimeoutException", ignoreCase = true) ||
+                            fileError.contains("ConnectException", ignoreCase = true) ||
+                            fileError.contains("timeout", ignoreCase = true)
+
+                    if (isConnectionDown) {
+                        Log.w(TAG, "Server connection down during upload, short-circuiting file retries: $fileError")
+                        _serverConnectionState.value = ServerConnectionState.DISCONNECTED
                         break
                     }
 
@@ -896,6 +1081,13 @@ class UploadManager(private val context: Context) {
                         serverMediaId = uploadedMediaId ?: it.serverMediaId
                     )
                     else it
+                }
+            }
+
+            val isFavNow = currentPhoto.isFavorite || favoritePrefs.getBoolean(photoId, false)
+            if (isFavNow && uploadedMediaId != null) {
+                scope.launch {
+                    apiClient.toggleFavorite(uploadedMediaId, true)
                 }
             }
 
@@ -1103,6 +1295,41 @@ class UploadManager(private val context: Context) {
         prefs.edit().remove(PREF_PHOTOGRAPHER_NAME).apply()
         scopes = emptyList()
         prefs.edit().remove(PREF_SCOPES).apply()
+    }
+
+    /**
+     * Toggles or sets favorite status for a photo locally and syncs to hellomyphotos server.
+     */
+    fun toggleFavorite(photoId: String, explicitFavorite: Boolean? = null): Boolean {
+        var newFav = false
+        var targetServerMediaId: String? = null
+
+        _photos.update { list ->
+            list.map { photo ->
+                if (photo.id == photoId || photo.fileName == photoId) {
+                    newFav = explicitFavorite ?: !photo.isFavorite
+                    targetServerMediaId = photo.serverMediaId
+                    val base = photo.fileName.substringBeforeLast(".")
+                    val editor = favoritePrefs.edit()
+                    editor.putBoolean(photo.id, newFav)
+                    editor.putBoolean(photo.fileName, newFav)
+                    editor.putBoolean(base, newFav)
+                    photo.rawFile?.let { editor.putBoolean(it.name, newFav) }
+                    photo.jpegFile?.let { editor.putBoolean(it.name, newFav) }
+                    editor.apply()
+                    photo.copy(isFavorite = newFav)
+                } else {
+                    photo
+                }
+            }
+        }
+
+        if (targetServerMediaId != null) {
+            scope.launch {
+                apiClient.toggleFavorite(targetServerMediaId!!, newFav)
+            }
+        }
+        return newFav
     }
 
     companion object {

@@ -48,10 +48,11 @@ fun GalleryScreen(
     val failedCount = remember(photos) { photos.count { it.status == UploadStatus.FAILED } }
     val uncompletedCount = pendingCount + failedCount
 
-    val displayedPhotos = if (curationMode == "curated") {
-        photos.filter { it.isHero || it.burstGroupId == null }
-    } else {
-        photos
+    val favoritesCount = photos.count { it.isFavorite }
+    val displayedPhotos = when (curationMode) {
+        "favorites" -> photos.filter { it.isFavorite }
+        "curated" -> photos.filter { it.isHero || it.burstGroupId == null }
+        else -> photos
     }
 
     androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -131,6 +132,19 @@ fun GalleryScreen(
                         Text(
                             text = "All (${photos.size})",
                             color = if (curationMode == "all") Slate100 else Slate400,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    Surface(
+                        color = if (curationMode == "favorites") Color(0x33EF4444) else Color.Transparent,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.clickable { viewModel.setCurationViewMode("favorites") }
+                    ) {
+                        Text(
+                            text = if (favoritesCount > 0) "❤️ $favoritesCount" else "❤️ Favs",
+                            color = if (curationMode == "favorites") Color(0xFFEF4444) else Slate400,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -313,19 +327,26 @@ fun GalleryScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.CameraAlt,
+                        imageVector = if (curationMode == "favorites") Icons.Default.FavoriteBorder else Icons.Default.CameraAlt,
                         contentDescription = null,
-                        tint = Slate600,
+                        tint = if (curationMode == "favorites") Color(0xFFEF4444).copy(alpha = 0.6f) else Slate600,
                         modifier = Modifier.size(64.dp)
                     )
                     Text(
-                        text = "No photos captured yet",
+                        text = when (curationMode) {
+                            "favorites" -> "No favorites in this folder"
+                            "curated" -> "No curated photos"
+                            else -> "No photos captured yet"
+                        },
                         color = Slate400,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        text = "Take a photo with the camera physical shutter to view it here instantly.",
+                        text = when (curationMode) {
+                            "favorites" -> "Tap the heart icon on any photo to favorite it and sync directly with hellomyphotos."
+                            else -> "Take a photo with the camera physical shutter to view it here instantly."
+                        },
                         color = Slate600,
                         fontSize = 13.sp,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -349,6 +370,9 @@ fun GalleryScreen(
                         onClick = { onPhotoClick(photo.id) },
                         onBurstClick = {
                             viewModel.openBurstDrawer(photo)
+                        },
+                        onFavoriteClick = {
+                            viewModel.toggleFavorite(photo)
                         }
                     )
                 }
@@ -378,7 +402,8 @@ fun GalleryScreen(
 fun PhotoGridItem(
     photo: PhotoItem,
     onClick: () -> Unit,
-    onBurstClick: (() -> Unit)? = null
+    onBurstClick: (() -> Unit)? = null,
+    onFavoriteClick: (() -> Unit)? = null
 ) {
     Box(
         modifier = Modifier
@@ -393,6 +418,28 @@ fun PhotoGridItem(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
+
+        // Favorite Heart Button (TopEnd)
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(4.dp)
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(
+                    if (photo.isFavorite) Color.Black.copy(alpha = 0.65f)
+                    else Color.Black.copy(alpha = 0.35f)
+                )
+                .clickable { onFavoriteClick?.invoke() },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (photo.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                contentDescription = if (photo.isFavorite) "Remove from favorites" else "Add to favorites",
+                tint = if (photo.isFavorite) Color(0xFFEF4444) else Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.size(16.dp)
+            )
+        }
 
         // Format Badge (RAW / JPG / RAW+JPG)
         Box(

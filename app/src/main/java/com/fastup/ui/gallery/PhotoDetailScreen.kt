@@ -3,6 +3,7 @@ package com.fastup.ui.gallery
 import android.content.res.Configuration
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -57,6 +58,13 @@ fun PhotoDetailScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { viewModel.toggleFavorite(photo) }) {
+                        Icon(
+                            imageVector = if (photo.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = if (photo.isFavorite) "Remove from favorites" else "Add to favorites",
+                            tint = if (photo.isFavorite) Color(0xFFEF4444) else Slate400
+                        )
+                    }
                     IconButton(onClick = { showShareDialog = true }) {
                         Icon(Icons.Default.Share, contentDescription = "Share Links & QR", tint = Color(0xFF38BDF8))
                     }
@@ -319,6 +327,45 @@ fun PhotoMetadataCard(
                         text = "View Burst Stack (${photo.burstCount} shots)",
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 13.sp
+                    )
+                }
+            }
+
+            HorizontalDivider(color = Slate700, thickness = 1.dp)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = if (photo.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = null,
+                        tint = if (photo.isFavorite) Color(0xFFEF4444) else Slate400,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text("Favorite Status", color = Slate400, fontSize = 13.sp)
+                }
+
+                Surface(
+                    color = if (photo.isFavorite) Color(0x33EF4444) else Color(0x1F94A3B8),
+                    shape = RoundedCornerShape(6.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        if (photo.isFavorite) Color(0x80EF4444) else Color(0x3394A3B8)
+                    ),
+                    modifier = Modifier.clickable { viewModel.toggleFavorite(photo) }
+                ) {
+                    Text(
+                        text = if (photo.isFavorite) "❤️ Favorited" else "Add to Favorites",
+                        color = if (photo.isFavorite) Color(0xFFEF4444) else Slate300,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
             }

@@ -39,6 +39,7 @@ data class MediaGDriveLinkResult(
 data class DualShareLinks(
     val title: String,
     val hellomyphotosUrl: String? = null,
+    val hellomyphotosFavoritesUrl: String? = null,
     val gdriveUrl: String? = null,
     val isGDriveSynced: Boolean = false,
     val gdriveStatus: String = "NOT_INITIALIZED", // NOT_INITIALIZED, SYNCING, READY, NOT_SYNCED

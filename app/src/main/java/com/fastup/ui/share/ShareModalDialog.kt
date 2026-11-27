@@ -98,16 +98,25 @@ fun ShareModalDialog(
         refreshLinks()
     }
 
-    fun handleHellomyphotosAction(openQr: Boolean) {
-        val existingUrl = linksState?.hellomyphotosUrl
-        if (!existingUrl.isNullOrBlank()) {
+    fun handleHellomyphotosAction(openQr: Boolean, favoritesOnly: Boolean = false) {
+        val rawBase = linksState?.hellomyphotosUrl
+        val targetUrl = if (favoritesOnly) {
+            linksState?.hellomyphotosFavoritesUrl ?: rawBase?.let {
+                if (it.contains("?")) "$it&favorites=true" else "$it?favorites=true"
+            }
+        } else {
+            rawBase
+        }
+
+        if (!targetUrl.isNullOrBlank()) {
             if (openQr) {
-                qrModalUrl = existingUrl
-                qrModalTitle = "Scan Hellomyphotos Link"
+                qrModalUrl = targetUrl
+                qrModalTitle = if (favoritesOnly) "Scan Favorites Only QR" else "Scan Hellomyphotos Link"
             } else {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Hellomyphotos Link", existingUrl))
-                Toast.makeText(context, "Copied Hellomyphotos link!", Toast.LENGTH_SHORT).show()
+                val label = if (favoritesOnly) "Hellomyphotos Favorites Link" else "Hellomyphotos Link"
+                clipboard.setPrimaryClip(ClipData.newPlainText(label, targetUrl))
+                Toast.makeText(context, "Copied $label!", Toast.LENGTH_SHORT).show()
             }
             return
         }
@@ -118,13 +127,18 @@ fun ShareModalDialog(
             viewModel.generatePhotoHellomyphotosLink(targetPhoto) { result ->
                 isGeneratingHellomyphotos = false
                 result.onSuccess { url ->
-                    linksState = linksState?.copy(hellomyphotosUrl = url)
+                    val favUrl = if (url.contains("?")) "$url&favorites=true" else "$url?favorites=true"
+                    linksState = linksState?.copy(
+                        hellomyphotosUrl = url,
+                        hellomyphotosFavoritesUrl = favUrl
+                    )
+                    val chosenUrl = if (favoritesOnly) favUrl else url
                     if (openQr) {
-                        qrModalUrl = url
-                        qrModalTitle = "Scan Hellomyphotos Link"
+                        qrModalUrl = chosenUrl
+                        qrModalTitle = if (favoritesOnly) "Scan Favorites Link" else "Scan Hellomyphotos Link"
                     } else {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Hellomyphotos Link", url))
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Hellomyphotos Link", chosenUrl))
                         Toast.makeText(context, "Link generated & copied to clipboard!", Toast.LENGTH_SHORT).show()
                     }
                 }.onFailure { err ->
@@ -132,16 +146,23 @@ fun ShareModalDialog(
                 }
             }
         } else {
-            viewModel.generateFolderHellomyphotosLink { result ->
+            viewModel.generateFolderHellomyphotosLink(favoritesOnly = favoritesOnly) { result ->
                 isGeneratingHellomyphotos = false
                 result.onSuccess { url ->
-                    linksState = linksState?.copy(hellomyphotosUrl = url)
+                    val cleanBase = url.replace(Regex("[?&]favorites=true"), "")
+                    val favUrl = if (cleanBase.contains("?")) "$cleanBase&favorites=true" else "$cleanBase?favorites=true"
+                    linksState = linksState?.copy(
+                        hellomyphotosUrl = cleanBase,
+                        hellomyphotosFavoritesUrl = favUrl
+                    )
+                    val chosenUrl = if (favoritesOnly) favUrl else cleanBase
                     if (openQr) {
-                        qrModalUrl = url
-                        qrModalTitle = "Scan Hellomyphotos Link"
+                        qrModalUrl = chosenUrl
+                        qrModalTitle = if (favoritesOnly) "Scan Favorites Link" else "Scan Hellomyphotos Link"
                     } else {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Hellomyphotos Link", url))
+                        val label = if (favoritesOnly) "Hellomyphotos Favorites Link" else "Hellomyphotos Link"
+                        clipboard.setPrimaryClip(ClipData.newPlainText(label, chosenUrl))
                         Toast.makeText(context, "Link generated & copied to clipboard!", Toast.LENGTH_SHORT).show()
                     }
                 }.onFailure { err ->
@@ -286,18 +307,37 @@ fun ShareModalDialog(
                         // ==========================================
                         // LINK 1: HELLOMYPHOTOS WEB GALLERY LINK
                         // ==========================================
+                        val photoBadge = if (targetPhoto?.isFavorite == true) "Single Photo (❤️ Fav)" else "Single Photo"
                         ShareCard(
-                            serviceName = "Hellomyphotos Link",
+                            serviceName = if (targetPhoto != null) "Hellomyphotos Photo" else "Hellomyphotos Gallery",
                             serviceIcon = Icons.Default.Public,
                             accentColor = Color(0xFF38BDF8),
-                            badgeText = if (!linksState?.hellomyphotosUrl.isNullOrBlank()) (if (targetPhoto != null) "Single Photo" else "Live Gallery") else "On-Demand",
+                            badgeText = if (!linksState?.hellomyphotosUrl.isNullOrBlank()) (if (targetPhoto != null) photoBadge else "Live Gallery") else "On-Demand",
                             url = linksState?.hellomyphotosUrl,
                             isLoading = false,
                             isGenerating = isGeneratingHellomyphotos,
                             emptyMessage = "Link not generated yet. Tap Copy Link or Show QR to generate.",
-                            onCopy = { handleHellomyphotosAction(openQr = false) },
-                            onShowQr = { handleHellomyphotosAction(openQr = true) }
+                            onCopy = { handleHellomyphotosAction(openQr = false, favoritesOnly = false) },
+                            onShowQr = { handleHellomyphotosAction(openQr = true, favoritesOnly = false) }
                         )
+
+                        // ==========================================
+                        // LINK 1B: HELLOMYPHOTOS FAVORITES-ONLY LINK
+                        // ==========================================
+                        if (targetPhoto == null) {
+                            ShareCard(
+                                serviceName = "Favorites Only Link",
+                                serviceIcon = Icons.Default.Favorite,
+                                accentColor = Color(0xFFEF4444),
+                                badgeText = "❤️ Favorites View",
+                                url = linksState?.hellomyphotosFavoritesUrl,
+                                isLoading = false,
+                                isGenerating = isGeneratingHellomyphotos,
+                                emptyMessage = "Direct link to favorited photos. Tap Copy Link or Show QR to generate.",
+                                onCopy = { handleHellomyphotosAction(openQr = false, favoritesOnly = true) },
+                                onShowQr = { handleHellomyphotosAction(openQr = true, favoritesOnly = true) }
+                            )
+                        }
 
                         // ==========================================
                         // LINK 2: GOOGLE DRIVE LINK

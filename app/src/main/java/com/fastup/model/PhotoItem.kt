@@ -39,6 +39,7 @@ enum class ServerConnectionState {
     DISCONNECTED,
     CONNECTING,
     CONNECTED,
+    BACKEND_DOWN,
     ERROR
 }
 
@@ -59,7 +60,8 @@ data class ServerStagingPhoto(
     val isHero: Boolean,
     val burstCount: Int,
     val qualityScore: Float?,
-    val faceCount: Int?
+    val faceCount: Int?,
+    val isFavorite: Boolean = false
 )
 
 data class PhotoItem(
@@ -80,7 +82,8 @@ data class PhotoItem(
     val isHero: Boolean = true,
     val burstCount: Int = 1,
     val qualityScore: Float? = null,
-    val serverMediaId: String? = null
+    val serverMediaId: String? = null,
+    val isFavorite: Boolean = false
 ) {
     val displayFile: File
         get() = previewFile ?: jpegFile ?: localFile

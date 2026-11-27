@@ -76,6 +76,14 @@ class MainViewModel : ViewModel() {
         _curationViewMode.value = mode
     }
 
+    fun toggleFavorite(photo: com.fastup.model.PhotoItem): Boolean {
+        return uploadManager.toggleFavorite(photo.id)
+    }
+
+    fun toggleFavorite(photoId: String): Boolean {
+        return uploadManager.toggleFavorite(photoId)
+    }
+
     fun syncCuration(onDone: (() -> Unit)? = null) {
         if (_isSyncingCuration.value) {
             onDone?.invoke()
@@ -116,7 +124,8 @@ class MainViewModel : ViewModel() {
                     isHero = p.isHero,
                     burstCount = p.burstCount,
                     qualityScore = p.qualityScore,
-                    faceCount = null
+                    faceCount = null,
+                    isFavorite = p.isFavorite
                 )
             }
             _burstAlternates.value = localGroup
@@ -394,6 +403,18 @@ class MainViewModel : ViewModel() {
                     actionType = IssueActionType.REPAIR_OTP
                 )
             )
+        } else if (srvState == ServerConnectionState.BACKEND_DOWN) {
+            issues.add(
+                SystemIssue(
+                    id = "srv_backend_down",
+                    type = IssueType.UPLOAD,
+                    severity = IssueSeverity.ERROR,
+                    title = "Backend Container Down",
+                    message = "Frontend is reachable, but backend is stopped (HTTP 502). Restart hellomyphotos backend.",
+                    actionLabel = "Test Connection",
+                    actionType = IssueActionType.TEST_CONNECTION
+                )
+            )
         } else if (srvState == ServerConnectionState.DISCONNECTED) {
             issues.add(
                 SystemIssue(
@@ -602,9 +623,14 @@ class MainViewModel : ViewModel() {
                 }
             }
 
+            val favUrl = existingShare?.let { url ->
+                if (url.contains("?")) "$url&favorites=true" else "$url?favorites=true"
+            }
+
             val result = DualShareLinks(
                 title = "Folder: $sessionId",
                 hellomyphotosUrl = existingShare,
+                hellomyphotosFavoritesUrl = favUrl,
                 gdriveUrl = gdriveLink,
                 isGDriveSynced = isSynced,
                 gdriveStatus = gdriveStatus,
@@ -616,14 +642,20 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    fun generateFolderHellomyphotosLink(onResult: (Result<String>) -> Unit) {
+    fun generateFolderHellomyphotosLink(favoritesOnly: Boolean = false, onResult: (Result<String>) -> Unit) {
         viewModelScope.launch {
             val res = uploadManager.apiClient.createShareLink(sessionId)
             res.onSuccess { info ->
                 uploadManager.generateShareLink { /* updates shareSession */ }
             }
             withContext(Dispatchers.Main) {
-                onResult(res.map { it.shareUrl })
+                val finalUrlResult = res.map { info ->
+                    val base = info.shareUrl
+                    if (favoritesOnly) {
+                        if (base.contains("?")) "$base&favorites=true" else "$base?favorites=true"
+                    } else base
+                }
+                onResult(finalUrlResult)
             }
         }
     }

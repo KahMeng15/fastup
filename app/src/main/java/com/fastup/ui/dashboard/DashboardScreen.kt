@@ -424,6 +424,7 @@ fun DashboardScreen(
         val (serverStatusText, serverStatusColor) = when (serverState) {
             ServerConnectionState.CONNECTED -> Pair("Online", Emerald500)
             ServerConnectionState.CONNECTING -> Pair("Connecting", Blue500)
+            ServerConnectionState.BACKEND_DOWN -> Pair("Backend Down", Rose500)
             ServerConnectionState.DISCONNECTED -> Pair("Offline", Slate400)
             ServerConnectionState.ERROR -> Pair("Session Expired", Amber500)
         }

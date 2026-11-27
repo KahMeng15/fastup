@@ -98,10 +98,18 @@ class ApiClient(
             }
             chain.proceed(requestBuilder.build())
         }
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .writeTimeout(90, TimeUnit.SECONDS)
-        .readTimeout(45, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
+        .build()
+
+    // Dedicated lightweight probe client with short 3s timeouts and no retries for rapid failure detection
+    private val pingClient = client.newBuilder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .writeTimeout(3, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
         .build()
 
     @Volatile
@@ -127,7 +135,8 @@ class ApiClient(
     suspend fun uploadPhoto(
         file: File,
         sessionId: String,
-        onProgress: (bytesWritten: Long, totalBytes: Long) -> Unit
+        onProgress: (bytesWritten: Long, totalBytes: Long) -> Unit,
+        isFavorite: Boolean = false
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val validSessionId = sessionId.trim().ifEmpty { "weddings" }
@@ -151,11 +160,18 @@ class ApiClient(
                 onProgress = onProgress
             )
 
-            val multipartBody = MultipartBody.Builder()
+            val multipartBuilder = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("sessionId", validSessionId)
                 .addFormDataPart("session_id", validSessionId)
                 .addFormDataPart("folderPath", validSessionId)
+
+            if (isFavorite) {
+                multipartBuilder.addFormDataPart("is_favorite", "true")
+                multipartBuilder.addFormDataPart("isFavorite", "true")
+            }
+
+            val multipartBody = multipartBuilder
                 .addFormDataPart(
                     "file",
                     uploadFileName,
@@ -459,7 +475,8 @@ class ApiClient(
 
     /**
      * Light-weight ping probe to check if the target server host is reachable on the network.
-     * Hits /api/staging/ping (public endpoint), falling back to /api/staging/sessions.
+     * Uses dedicated fast pingClient with 3-second timeout so it never blocks or hangs the app.
+     * Distinguishes between completely unreachable server and frontend-up/backend-down (HTTP 502/503/504).
      */
     suspend fun pingServer(targetUrl: String? = null): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
@@ -470,24 +487,27 @@ class ApiClient(
                 .get()
                 .build()
 
-            client.newCall(request).execute().use { response ->
-                // Any HTTP response (200..499) proves the network route, IP, port and server are alive!
-                if (response.isSuccessful || response.code in 200..499) {
+            pingClient.newCall(request).execute().use { response ->
+                if (response.code in 502..504) {
+                    Result.failure(IOException("BACKEND_DOWN: HTTP ${response.code} (Backend container is down or starting)"))
+                } else if (response.isSuccessful || response.code in 200..499) {
                     Result.success(true)
                 } else {
                     Result.failure(IOException("Server HTTP ${response.code}"))
                 }
             }
         } catch (e: Exception) {
-            // Fallback attempt to root/staging folder check in case /ping is not deployed yet
+            // Rapid fallback attempt to /api/staging/folders with same fast pingClient
             try {
                 val fallbackBase = (targetUrl ?: baseUrl).trim().trimEnd('/')
                 val fallbackReq = Request.Builder()
                     .url("$fallbackBase/api/staging/folders")
                     .get()
                     .build()
-                client.newCall(fallbackReq).execute().use { fbResponse ->
-                    if (fbResponse.code in 200..499) {
+                pingClient.newCall(fallbackReq).execute().use { fbResponse ->
+                    if (fbResponse.code in 502..504) {
+                        return@withContext Result.failure(IOException("BACKEND_DOWN: HTTP ${fbResponse.code} (Backend container is down)"))
+                    } else if (fbResponse.code in 200..499) {
                         return@withContext Result.success(true)
                     }
                 }
@@ -515,8 +535,10 @@ class ApiClient(
                 .get()
                 .build()
 
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
+            pingClient.newCall(request).execute().use { response ->
+                if (response.code in 502..504) {
+                    Result.failure(IOException("BACKEND_DOWN: HTTP ${response.code} (Backend container is down or starting)"))
+                } else if (response.isSuccessful) {
                     Result.success(true)
                 } else if (response.code == 401 || response.code == 403) {
                     Result.failure(IOException("AUTH_EXPIRED: HTTP ${response.code}"))
@@ -610,6 +632,7 @@ class ApiClient(
                     val burstCount = f.optInt("burst_count", 1)
                     val qualityScore = if (f.isNull("quality_score")) null else f.optDouble("quality_score").toFloat()
                     val faceCount = if (f.isNull("face_count")) null else f.optInt("face_count")
+                    val isFavorite = f.optBoolean("is_favorite", false) || f.optBoolean("isFavorite", false)
 
                     if (name.isNotBlank()) {
                         resultList.add(
@@ -621,7 +644,8 @@ class ApiClient(
                                 isHero = isHero,
                                 burstCount = burstCount,
                                 qualityScore = qualityScore,
-                                faceCount = faceCount
+                                faceCount = faceCount,
+                                isFavorite = isFavorite
                             )
                         )
                     }
@@ -663,6 +687,7 @@ class ApiClient(
                     val burstCount = f.optInt("burst_count", 1)
                     val qualityScore = if (f.isNull("quality_score")) null else f.optDouble("quality_score").toFloat()
                     val faceCount = if (f.isNull("face_count")) null else f.optInt("face_count")
+                    val isFavorite = f.optBoolean("is_favorite", false) || f.optBoolean("isFavorite", false)
 
                     if (name.isNotBlank()) {
                         resultList.add(
@@ -674,7 +699,8 @@ class ApiClient(
                                 isHero = isHero,
                                 burstCount = burstCount,
                                 qualityScore = qualityScore,
-                                faceCount = faceCount
+                                faceCount = faceCount,
+                                isFavorite = isFavorite
                             )
                         )
                     }
@@ -731,6 +757,38 @@ class ApiClient(
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     Result.success(true)
+                } else {
+                    Result.failure(IOException("Server HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Toggle or set favorite status for a staged photo.
+     * POST /api/staging/media/:id/favorite
+     */
+    suspend fun toggleFavorite(mediaId: String, isFavorite: Boolean): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val endpoint = cleanUrl("api/staging/media/$mediaId/favorite")
+            val json = JSONObject().apply {
+                put("is_favorite", isFavorite)
+            }
+            val body = json.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("x-api-key", apiKey)
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val bodyStr = response.body?.string() ?: "{}"
+                    val obj = JSONObject(bodyStr)
+                    val newFav = obj.optBoolean("is_favorite", isFavorite)
+                    Result.success(newFav)
                 } else {
                     Result.failure(IOException("Server HTTP ${response.code}"))
                 }

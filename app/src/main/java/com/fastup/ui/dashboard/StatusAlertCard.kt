@@ -61,15 +61,10 @@ fun StatusAlertCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
+                        modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(headerColor)
-                        )
                         Icon(
                             imageVector = if (hasErrors) Icons.Default.ErrorOutline else Icons.Default.Warning,
                             contentDescription = null,
@@ -80,9 +75,13 @@ fun StatusAlertCard(
                             text = "Alerts & Active Issues (${issues.size})",
                             color = Slate100,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
+
+                    Spacer(modifier = Modifier.width(8.dp))
 
                     Surface(
                         color = headerColor.copy(alpha = 0.15f),
@@ -93,7 +92,8 @@ fun StatusAlertCard(
                             color = headerColor,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            maxLines = 1,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                         )
                     }
                 }

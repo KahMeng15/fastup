@@ -153,6 +153,10 @@ fun BurstStackDrawer(
                                 onToggleVisibility = {
                                     viewModel.togglePhotoVisibility(alt.id, alt.isHero)
                                 },
+                                onToggleFavorite = {
+                                    if (localPhoto != null) viewModel.toggleFavorite(localPhoto)
+                                    else viewModel.toggleFavorite(alt.id)
+                                },
                                 onClick = {
                                     if (localPhoto != null && onPhotoSelect != null) {
                                         viewModel.closeBurstDrawer()
@@ -175,6 +179,7 @@ fun BurstStackItemCard(
     localPhoto: PhotoItem?,
     onSetHero: () -> Unit,
     onToggleVisibility: () -> Unit,
+    onToggleFavorite: () -> Unit,
     onClick: () -> Unit
 ) {
     val isHero = alt.isHero
@@ -337,6 +342,39 @@ fun BurstStackItemCard(
                             color = Amber400,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Favorite Toggle Button
+                val isFav = alt.isFavorite || (localPhoto?.isFavorite == true)
+                Surface(
+                    color = if (isFav) Color(0x33EF4444) else Color.Transparent,
+                    shape = RoundedCornerShape(4.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = 1.dp,
+                        color = if (isFav) Color(0x80EF4444) else Color.White.copy(alpha = 0.15f)
+                    ),
+                    modifier = Modifier.clickable(onClick = onToggleFavorite)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isFav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = "Favorite",
+                            tint = if (isFav) Color(0xFFEF4444) else Slate400,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Text(
+                            text = if (isFav) "Fav" else "Fav",
+                            color = if (isFav) Color(0xFFEF4444) else Slate400,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
